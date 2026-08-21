@@ -15,7 +15,12 @@ import inspect
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping
 
-from proofos.journal import EventType, Journal, Severity
+from proofos.journal import (
+    EventType,
+    Journal,
+    JournalUnavailableError,
+    Severity,
+)
 
 MAX_ATTEMPTS = 2
 
@@ -66,10 +71,22 @@ async def run_verification_loop(
     final_status = "ABSTAIN"
     terminal_reason = "No attempt was made."
     failure_class = "RETRY_EXHAUSTED"
+    audit_failures: list[str] = []
 
-    def note(event: EventType, agent: str, status: str, severity=Severity.INFO, **detail):
-        if journal is not None:
-            journal.record(event, agent, status, severity, **detail)
+    def note(event: EventType, agent: str, status: str, severity=Severity.INFO, **payload):
+        """Append to the audit trail, remembering any failure to do so.
+
+        A journal failure never feeds the verification decision -- it cannot
+        manufacture evidence. But an execution whose reasoning was not recorded
+        cannot be presented as verified either, so it is remembered here and
+        downgraded at the end.
+        """
+        if journal is None:
+            return
+        try:
+            journal.record(event, agent, status, severity, **payload)
+        except JournalUnavailableError as exc:
+            audit_failures.append(f"{event}: {exc}")
 
     note(
         EventType.EXECUTION_START,
@@ -183,6 +200,16 @@ async def run_verification_loop(
                 **detail,
             )
 
+    if audit_failures:
+        # No claim of completion we cannot account for. Losing the audit trail
+        # never creates evidence, so it can only ever downgrade the outcome.
+        final_status = "ABSTAIN"
+        failure_class = "AUDIT_UNAVAILABLE"
+        terminal_reason = (
+            "Verification could not be durably recorded, so completion is not "
+            f"claimed. {audit_failures[0]}"
+        )
+
     note(
         EventType.EXECUTION_COMPLETE,
         ORCHESTRATOR,
@@ -202,4 +229,7 @@ async def run_verification_loop(
     if journal is not None:
         outcome["execution_id"] = journal.execution_id
         outcome["trace_id"] = journal.trace_id
+        outcome["audit_intact"] = not audit_failures
+        if audit_failures:
+            outcome["audit_failures"] = audit_failures
     return outcome
