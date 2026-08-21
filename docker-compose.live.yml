@@ -1,0 +1,31 @@
+# Live Gemini overlay.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.live.yml up --build
+#
+# Credentials are read from the host environment or from a local .env file,
+# which is gitignored. No key is written here, and none is baked into an image:
+# these are substitutions, so this file stays safe to commit and safe to read.
+#
+# Only the API talks to Gemini. The collector is deliberately absent from this
+# file -- it observes the network and signs what it saw, and a model plays no
+# part in that. Giving it credentials would widen its reach for no reason.
+#
+# The defaults are empty on purpose. An unset key produces an empty value, the
+# API's preflight refuses to start, and there is no path from "no credentials"
+# to "run deterministically and call it live".
+services:
+  api:
+    environment:
+      PROOFOS_AGENT_RUNTIME: gemini
+
+      # Gemini Developer API: set one of these.
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+      # Vertex AI: set USE_VERTEXAI=TRUE with a project. gemini-3.5-flash is
+      # served from the global endpoint, which is a Vertex location and not a
+      # Cloud Run region.
+      GOOGLE_GENAI_USE_VERTEXAI: ${GOOGLE_GENAI_USE_VERTEXAI:-}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-global}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
