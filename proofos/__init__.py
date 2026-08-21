@@ -1,4 +1,11 @@
 from .integrity import content_hash
+from .journal import (
+    EventType,
+    ExecutionEvent,
+    InMemoryJournalSink,
+    Journal,
+    JournalUnavailableError,
+)
 from .ledger import EvidenceLedger, EvidenceTamperedError, UnknownTaskError
 from .probe import ProbeOutcome, ProbeResult, probe_health
 from .verifier import (
@@ -16,7 +23,12 @@ __all__ = [
     "EvidenceLedger",
     "EvidenceSource",
     "EvidenceTamperedError",
+    "EventType",
+    "ExecutionEvent",
     "FailureClass",
+    "InMemoryJournalSink",
+    "Journal",
+    "JournalUnavailableError",
     "ProbeOutcome",
     "ProbeResult",
     "Requirement",
