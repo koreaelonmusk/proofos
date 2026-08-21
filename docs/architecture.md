@@ -37,10 +37,27 @@ Every anomaly resolves to `ABSTAIN`, never to `VERIFIED`:
 | `EVIDENCE_MISSING` | No evidence of a required kind; no declared requirements |
 | `EVIDENCE_INVALID` | Evidence tampered, empty, conflicting, or a failed probe |
 | `EVIDENCE_UNTRUSTED` | Evidence present but only `EXECUTOR` / `MODEL` sourced |
+| `EVIDENCE_STALE` | Observation older than the requirement's horizon, or undated |
+| `EVIDENCE_TAMPERED` | A record no longer matches its own content hash |
 | `MALFORMED_INPUT` | Malformed claim, malformed evidence item, unknown task |
 | `VERIFIER_FAILURE` | Unexpected exception inside the verifier |
 
 A verifier that crashes must never be read as success.
+
+## Audit trail
+
+Every execution appends immutable events to a journal covering the claim, each
+tool call, each verification decision, each recovery attempt, and every
+observation collected or rejected. Events carry `execution_id`, `trace_id`,
+`task_id`, agent, status, and a SHA-256 of their own content.
+
+Replaying an execution reconstructs the decision without trusting any agent's
+summary. Events are emitted as single-line JSON with a `severity` field, which
+Cloud Logging ingests from stdout on Cloud Run without a client library.
+
+Orchestrator-level failures are distinguished: `MODEL_NONCOMPLIANCE` when the
+agent never called the verifier, `COLLECTOR_UNAVAILABLE` when nothing can obtain
+the missing evidence, `RETRY_EXHAUSTED` when the budget ran out.
 
 ## Recovery
 
