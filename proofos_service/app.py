@@ -26,13 +26,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from proofos.journal import (
-    FanoutJournalSink,
-    InMemoryJournalSink,
-    Journal,
-    StreamJournalSink,
-    summarize,
-)
+from proofos.journal import Journal, JournalUnavailableError, summarize
+from proofos.journal_backend import build_journal_backend
 from proofos.ledger import EvidenceLedger
 from proofos_agent import scenario
 from proofos_agent.recovery import MAX_ATTEMPTS, Turn, run_verification_loop
@@ -46,9 +41,10 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# One durable journal sink per process. Every execution also streams its events
-# to stdout, where Cloud Logging picks them up.
-JOURNAL_SINK = InMemoryJournalSink()
+# One journal backend per process. In-memory by default; set
+# PROOFOS_JOURNAL_BACKEND=firestore to persist. Every execution also streams its
+# events to stdout, where Cloud Logging picks them up.
+JOURNAL = build_journal_backend()
 
 
 class ExecutionRequest(BaseModel):
@@ -79,6 +75,7 @@ def root() -> dict[str, Any]:
         "service": SERVICE_NAME,
         "invariant": "no claim of completion without independent evidence",
         "endpoints": ["/healthz", "/executions", "/executions/{execution_id}"],
+        "journal_backend": JOURNAL.backend,
     }
 
 
@@ -101,10 +98,7 @@ async def create_execution(request: ExecutionRequest) -> dict[str, Any]:
     ledger = EvidenceLedger()
     scenario.seed_incomplete_evidence(ledger)
 
-    journal = Journal(
-        FanoutJournalSink(StreamJournalSink(), JOURNAL_SINK),
-        task_id=scenario.TASK_ID,
-    )
+    journal = Journal(JOURNAL.append_sink, task_id=scenario.TASK_ID)
 
     verify_tool = build_verification_tool(ledger)
     claim = request.claim
@@ -152,6 +146,7 @@ async def create_execution(request: ExecutionRequest) -> dict[str, Any]:
         "task_id": scenario.TASK_ID,
         "claim": claim,
         "health_endpoint": health_url,
+        "journal_backend": JOURNAL.backend,
         "probes": probes,
         **outcome,
     }
@@ -160,10 +155,20 @@ async def create_execution(request: ExecutionRequest) -> dict[str, Any]:
 @app.get("/executions/{execution_id}")
 def read_execution(execution_id: str) -> dict[str, Any]:
     """Replay the audit trail for one execution."""
-    events = JOURNAL_SINK.read(execution_id)
+    try:
+        events = JOURNAL.durable_sink.list_execution(execution_id)
+    except JournalUnavailableError as exc:
+        # An unreadable journal is reported, never silently thinned into a
+        # shorter history that would understate what happened.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     if not events:
         raise HTTPException(status_code=404, detail="unknown execution_id")
+
+    chain_ok, problems = JOURNAL.durable_sink.verify_chain(execution_id)
     return {
         "summary": summarize(events),
+        "chain_ok": chain_ok,
+        "chain_problems": list(problems),
         "events": [event.to_dict() for event in events],
     }

@@ -20,13 +20,8 @@ import sys
 from google.adk.runners import InMemoryRunner
 from google.genai import types
 
-from proofos.journal import (
-    FanoutJournalSink,
-    InMemoryJournalSink,
-    Journal,
-    StreamJournalSink,
-    summarize,
-)
+from proofos.journal import Journal, summarize
+from proofos.journal_backend import build_journal_backend
 from proofos_agent import scenario
 from proofos_agent.agent import LEDGER, MODEL, root_agent
 from proofos_agent.demo_service import running_health_service
@@ -126,9 +121,11 @@ async def main() -> int:
 
     # Journal lines go to stderr so the report on stdout stays parseable.
     # On Cloud Run both streams are ingested by Cloud Logging.
-    durable = InMemoryJournalSink()
+    from proofos.journal import FanoutJournalSink, StreamJournalSink
+
+    backend = build_journal_backend(stream_replica=False)
     journal = Journal(
-        FanoutJournalSink(StreamJournalSink(sys.stderr), durable),
+        FanoutJournalSink(backend.durable_sink, StreamJournalSink(sys.stderr)),
         task_id=scenario.TASK_ID,
     )
 

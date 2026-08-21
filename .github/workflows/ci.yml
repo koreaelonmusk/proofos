@@ -22,5 +22,7 @@ jobs:
         run: python -c "from proofos_agent.agent import root_agent; print(root_agent.name, root_agent.model)"
       - name: Import service app
         run: python -c "from proofos_service.app import app; print(app.title, len(app.routes), 'routes')"
+      - name: Import Firestore journal sink
+        run: python -c "from proofos.firestore_journal import FirestoreJournalSink; from google.cloud import firestore; print('firestore adapter OK', firestore.__name__)"
       - name: Run verification contract tests
         run: python -m unittest discover -s tests -t . -v
