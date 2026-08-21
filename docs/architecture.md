@@ -59,6 +59,24 @@ Orchestrator-level failures are distinguished: `MODEL_NONCOMPLIANCE` when the
 agent never called the verifier, `COLLECTOR_UNAVAILABLE` when nothing can obtain
 the missing evidence, `RETRY_EXHAUSTED` when the budget ran out.
 
+## Durable journal
+
+```text
+JournalSink: append(draft) / store(event) / list_execution(id) / verify_chain(id)
+  InMemoryJournalSink   default, no credentials
+  FirestoreJournalSink  executions/{id}/events/{sequence}
+```
+
+Events are hash-chained: each digest covers the event's own content, its
+explicit sequence, and the previous event's hash. Storage ordering is never
+trusted. Appends are atomic -- create() inside a transaction that advances the
+chain head -- so concurrent writers cannot share a sequence and no write path
+overwrites an existing event.
+
+Storage is not an authority. The verifier imports no storage module, and a
+forged VERIFIED record cannot move a verdict. Losing the journal downgrades an
+outcome to ABSTAIN/AUDIT_UNAVAILABLE; it can never create a success.
+
 ## Recovery
 
 An `ABSTAIN` names the unsatisfied evidence kinds. Recovery attempts to collect

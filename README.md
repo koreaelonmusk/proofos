@@ -76,11 +76,64 @@ VERIFIER_DECISION    verifier      VERIFIED
 EXECUTION_COMPLETE   orchestrator  VERIFIED
 ```
 
+Each event carries an explicit `sequence` and the previous event's hash, and its
+own digest covers both. Removing, reordering, duplicating, or editing any event
+breaks the chain from that point on. **Ordering comes from the sequence field,
+never from storage order.**
+
+Only a sink may place an event in the chain. Callers hand over a draft with no
+sequence and no digest, so nothing can choose its own position in history or
+backdate a record. Appending is idempotent on `event_id`, so a retried request
+records a step once — and a retry cannot rewrite a recorded outcome.
+
 Replaying an `execution_id` reconstructs why a task was verified without
 trusting any agent's account of it. Events carry correlation ids and a hash of
 their own content, and are emitted as single-line JSON with a `severity` field —
 the shape Cloud Logging ingests from stdout on Cloud Run, with no client
 library and no added dependency.
+
+## Durable audit trail
+
+The journal is written behind a sink interface:
+
+```text
+JournalSink
+  append(draft) -> ExecutionEvent    # assigns sequence, links the chain
+  store(event)                       # replicate an already-chained event
+  list_execution(execution_id)
+  verify_chain(execution_id)
+```
+
+`InMemoryJournalSink` is the default and needs no credentials.
+`FirestoreJournalSink` persists to:
+
+```text
+executions/{execution_id}                 # chain head: next_sequence, head_hash
+executions/{execution_id}/events/{seq}    # one document per event
+executions/{execution_id}/event_ids/{id}  # idempotency index
+```
+
+Enable it with `PROOFOS_JOURNAL_BACKEND=firestore`. Requesting Firestore
+without credentials fails at startup rather than silently degrading to a
+non-durable store — a quiet fallback would be the audit equivalent of claiming
+success without evidence.
+
+### Storage is not an authority
+
+Persistence creates an obvious temptation: if the store holds a `VERIFIED`
+record, treat it as proof. That would invert the product — the decision would
+come from a database rather than from evidence.
+
+The verifier never reads the journal. `verifier.py`, `ledger.py`, and `probe.py`
+import no storage module, and a test asserts it. A forged `VERIFIED` record in
+Firestore does not move a verdict; journal payloads naming `OBSERVED` evidence
+are not reachable as evidence; the ledger exposes no load-from-storage path.
+
+### Losing the audit trail cannot produce a success
+
+A journal failure never manufactures evidence, so it can only downgrade an
+outcome. An execution whose reasoning could not be durably recorded is reported
+as `ABSTAIN` / `AUDIT_UNAVAILABLE`, and every result carries `audit_intact`.
 
 ## Runtime evidence comes from a real probe
 
@@ -140,7 +193,9 @@ User Goal
 │   ├── ledger.py            # runtime-owned evidence store (trust boundary)
 │   ├── probe.py             # real HTTP health probe (evidence collector)
 │   ├── integrity.py         # canonical hashing for evidence and events
-│   └── journal.py           # append-only execution journal (audit trail)
+│   ├── journal.py           # append-only, hash-chained execution journal
+│   ├── journal_backend.py   # backend selection (memory | firestore)
+│   └── firestore_journal.py # durable Firestore sink
 ├── proofos_agent/
 │   ├── __init__.py
 │   ├── agent.py             # Gemini 3.5 Flash / ADK agent
@@ -159,7 +214,9 @@ User Goal
 │   ├── test_probe.py        # probe against real sockets and real servers
 │   ├── test_runtime_evidence.py  # probe -> ledger -> verifier, fail-closed
 │   ├── test_adversarial.py  # attempts to manufacture a VERIFIED
-│   ├── test_journal.py      # audit trail recording, integrity, replay
+│   ├── test_journal.py      # chain recording, integrity, replay
+│   ├── test_firestore_journal.py  # Firestore adapter contract
+│   ├── test_storage_authority.py  # storage must never become an authority
 │   ├── test_service.py      # service over a real socket
 │   └── test_recovery.py     # recovery loop against the real verifier
 ├── docs/
@@ -294,6 +351,9 @@ After deployment, preserve the generated `.run.app` URL plus Cloud Run / Vertex 
 - [x] Tampered evidence and tampered journal events are detected
 - [x] Recovery after a transient failure can still verify
 - [x] Append-only audit trail reconstructs every decision
+- [x] Hash-chained events detect deletion, reordering, and duplication
+- [x] Storage cannot override runtime authority
+- [x] Audit loss downgrades to ABSTAIN, never to VERIFIED
 - [x] Deterministic verifier tests pass
 - [ ] Live Gemini 3.5 Flash call succeeds
 - [ ] ADK invokes verifier tool in a real session
@@ -312,9 +372,11 @@ After deployment, preserve the generated `.run.app` URL plus Cloud Run / Vertex 
 
 ## Known limitations
 
-- The evidence ledger and journal are in-memory. The journal is written behind
-  a sink interface with an in-memory implementation; a Firestore sink is the
-  next step and is **not built**, so decisions are not durable across processes.
+- The Firestore sink is **implemented but not proven**: its contract is covered
+  by deterministic tests against an in-process stand-in, and no write or read
+  against a real Firestore project has been performed.
+- The evidence ledger itself is still in-memory and per-execution. Only the
+  journal has a durable backend.
 - Evidence hashing detects silent mutation of stored records. It is not a
   signature and does not prove who wrote a record.
 - The runtime collector performs a real HTTP probe, but the demo target is a
