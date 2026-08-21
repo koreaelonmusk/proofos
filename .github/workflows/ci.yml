@@ -12,7 +12,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Run verifier tests
-        run: python -m unittest discover -s tests -v
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
       - name: Compile Python
         run: python -m compileall -q proofos proofos_agent
+      # compileall does not import, so it cannot prove the ADK wiring works.
+      # Import the agent explicitly to catch API drift in google-adk.
+      - name: Import ADK agent
+        run: python -c "from proofos_agent.agent import root_agent; print(root_agent.name, root_agent.model)"
+      - name: Run verification contract tests
+        run: python -m unittest discover -s tests -v
