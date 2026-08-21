@@ -106,18 +106,31 @@ class _BaseHttpClient:
 
 
 class HttpCollectorClient(_BaseHttpClient):
-    """Unauthenticated transport, restricted to a loopback collector.
+    """Unauthenticated transport.
 
-    Refusing non-loopback targets keeps this from silently becoming the
-    production path: a remote collector needs real identity, not an open port.
+    Loopback needs no argument. Any other host does: reaching a collector over
+    a network without credentials means the only thing between a caller and the
+    signing service is network reachability -- a real boundary on a private
+    container network, and none at all on the internet. Naming ``allow_remote``
+    makes that a decision someone took rather than one that happened.
+
+    Note what it does not weaken. The attestation signature is checked either
+    way. An unauthenticated transport governs who may *call* the collector; it
+    never affects what the collector can be made to say.
     """
 
-    def __init__(self, base_url: str, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        allow_remote: bool = False,
+    ) -> None:
         host = urlsplit(base_url).hostname
-        if host not in LOOPBACK_HOSTS:
+        if host not in LOOPBACK_HOSTS and not allow_remote:
             raise ValueError(
-                f"HttpCollectorClient carries no credentials and is loopback-only; "
-                f"{host!r} needs GoogleIdTokenCollectorClient"
+                f"HttpCollectorClient carries no credentials and {host!r} is not "
+                "loopback. Use GoogleIdTokenCollectorClient, or pass "
+                "allow_remote=True to accept network reachability as the boundary."
             )
         super().__init__(base_url, timeout)
 
@@ -161,14 +174,34 @@ class GoogleIdTokenCollectorClient(_BaseHttpClient):
         return {"Authorization": f"Bearer {token}"}
 
 
-def build_collector_client(
-    base_url: str, timeout: float = DEFAULT_TIMEOUT_SECONDS
-) -> CollectorClient:
-    """Pick the transport the target actually requires.
+AUTH_AUTO = "auto"
+AUTH_NONE = "none"
+AUTH_GOOGLE_OIDC = "google-oidc"
+AUTH_MODES = (AUTH_AUTO, AUTH_NONE, AUTH_GOOGLE_OIDC)
 
-    Loopback gets the unauthenticated client; anything else must present a
-    Google-signed identity.
+
+def build_collector_client(
+    base_url: str,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    auth: str = AUTH_AUTO,
+) -> CollectorClient:
+    """Pick the transport, defaulting to the safer choice.
+
+    ``auto`` means loopback is unauthenticated and anything else must present a
+    Google-signed identity -- the right default, since the common non-loopback
+    case is Cloud Run. A private container network is the case in between: the
+    collector is reachable by hostname and there is no Google identity to
+    obtain, so such a deployment says ``none`` explicitly rather than having the
+    requirement quietly dropped on its behalf.
     """
+    if auth not in AUTH_MODES:
+        raise ValueError(f"unknown collector auth mode {auth!r}; allowed: {AUTH_MODES}")
+
+    if auth == AUTH_GOOGLE_OIDC:
+        return GoogleIdTokenCollectorClient(base_url, timeout)
+    if auth == AUTH_NONE:
+        return HttpCollectorClient(base_url, timeout, allow_remote=True)
+
     host = urlsplit(base_url).hostname
     if host in LOOPBACK_HOSTS:
         return HttpCollectorClient(base_url, timeout)

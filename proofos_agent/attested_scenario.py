@@ -82,9 +82,17 @@ async def run_attested_scenario(
     max_attempts: int = MAX_ATTEMPTS,
     probe_runner: ProbeRunner | None = None,
     action: Callable[[], str] | None = None,
+    collector_id: str = COLLECTOR_ID,
+    profile_id: str = RUNTIME_HEALTH_PROFILE,
 ) -> tuple[dict[str, Any], Journal, EvidenceLedger]:
     fleet, attested, journal, ledger, _ = build_attested_fleet(
-        sink, collector_public_key_b64, client, registry, task_id
+        sink,
+        collector_public_key_b64,
+        client,
+        registry,
+        task_id,
+        collector_id=collector_id,
+        profile_id=profile_id,
     )
 
     def seed_ci_evidence() -> None:
