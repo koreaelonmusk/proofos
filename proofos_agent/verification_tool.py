@@ -1,0 +1,67 @@
+"""The verification tool, bound to a specific evidence ledger.
+
+The tool is built as a closure over a ledger rather than reading a module
+global, so each execution can own its evidence. A shared global would let one
+request observe another request's evidence, which is a correctness bug and a
+cross-tenant leak in anything multi-user.
+
+The signature is the trust boundary and is deliberately minimal: a caller may
+name a task and state a claim. It cannot declare what counts as proof, assert
+that proof exists, or supply its own verdict. Whatever the model writes into
+``claim`` is an assertion under scrutiny, never an input to the decision.
+"""
+
+from __future__ import annotations
+
+from typing import Callable
+
+from proofos.ledger import EvidenceLedger, EvidenceTamperedError, UnknownTaskError
+from proofos.verifier import FailureClass, VerificationStatus, verify_completion
+
+
+def build_verification_tool(ledger: EvidenceLedger) -> Callable[[str, str], dict]:
+    """Return a verification tool that reads only from ``ledger``."""
+
+    def verify_task_completion(task_id: str, claim: str) -> dict:
+        """Verify a completion claim for a task against independently collected evidence.
+
+        Args:
+            task_id: Identifier of the task being verified.
+            claim: The completion claim being made about that task.
+
+        Returns:
+            A verification decision. The caller cannot influence which evidence
+            exists; evidence is read from the runtime-owned ledger.
+        """
+        try:
+            required = ledger.requirements(task_id)
+            evidence = ledger.evidence(task_id)
+        except UnknownTaskError:
+            return {
+                "status": VerificationStatus.ABSTAIN.value,
+                "reason": f"No verification task is registered for task_id={task_id!r}.",
+                "missing": [],
+                "failure": FailureClass.MALFORMED_INPUT.value,
+            }
+        except EvidenceTamperedError:
+            return {
+                "status": VerificationStatus.ABSTAIN.value,
+                "reason": "Stored evidence failed its integrity check.",
+                "missing": [],
+                "failure": FailureClass.EVIDENCE_TAMPERED.value,
+            }
+
+        result = verify_completion(
+            claim=claim,
+            evidence=evidence,
+            required_kinds=required,
+        )
+
+        return {
+            "status": result.status.value,
+            "reason": result.reason,
+            "missing": list(result.missing),
+            "failure": result.failure.value,
+        }
+
+    return verify_task_completion

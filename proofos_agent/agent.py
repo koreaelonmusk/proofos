@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from google.adk.agents import Agent
 
-from proofos.ledger import EvidenceLedger, UnknownTaskError
-from proofos.verifier import FailureClass, VerificationStatus, verify_completion
+from proofos.ledger import EvidenceLedger
+from proofos_agent.verification_tool import build_verification_tool
 
 MODEL = "gemini-3.5-flash"
 
@@ -11,42 +11,7 @@ MODEL = "gemini-3.5-flash"
 # model can only reference a task id.
 LEDGER = EvidenceLedger()
 
-
-def verify_task_completion(task_id: str, claim: str) -> dict:
-    """Verify a completion claim for a task against independently collected evidence.
-
-    Args:
-        task_id: Identifier of the task being verified.
-        claim: The completion claim being made about that task.
-
-    Returns:
-        A verification decision. The caller cannot influence which evidence
-        exists; evidence is read from the runtime-owned ledger.
-    """
-    try:
-        required = LEDGER.requirements(task_id)
-        evidence = LEDGER.evidence(task_id)
-    except UnknownTaskError:
-        return {
-            "status": VerificationStatus.ABSTAIN.value,
-            "reason": f"No verification task is registered for task_id={task_id!r}.",
-            "missing": [],
-            "failure": FailureClass.MALFORMED_INPUT.value,
-        }
-
-    result = verify_completion(
-        claim=claim,
-        evidence=evidence,
-        required_kinds=required,
-    )
-
-    return {
-        "status": result.status.value,
-        "reason": result.reason,
-        "missing": list(result.missing),
-        "failure": result.failure.value,
-    }
-
+verify_task_completion = build_verification_tool(LEDGER)
 
 root_agent = Agent(
     name="proofos_verifier",
