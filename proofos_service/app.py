@@ -2,36 +2,44 @@
 
 Exposes the verification runtime over HTTP so it can run on Cloud Run.
 
-Three endpoints, each with a reason to exist:
+Four endpoints, each with a reason to exist:
 
 * ``GET /healthz``  -- the service's own health, in the exact shape the ProofOS
-  probe requires. A deployed ProofOS can therefore be the target of a real
-  probe, which is what makes cloud evidence collection genuine rather than
-  simulated.
-* ``POST /executions`` -- run a bounded verify/recover execution for a task and
-  return the decision.
+  probe requires, so a deployed ProofOS can be the target of a real probe.
+* ``GET /config`` -- how this instance obtains runtime evidence, so the
+  separation is inspectable from outside the process.
+* ``POST /executions`` -- run a bounded verify/recover execution.
 * ``GET /executions/{execution_id}`` -- replay the audit trail for a decision.
 
-The trust boundary is unchanged and is the reason the request body is so small:
-a caller may state a claim, and nothing else. It cannot declare what counts as
-proof, assert that proof exists, or name its own verdict.
+In the default (remote) mode this process cannot produce runtime evidence at
+all. It can ask a separate collector to look, and it can check the signature on
+what comes back. It holds no signing key, so it cannot author an observation,
+and there is no path by which a failed collection becomes locally-produced
+evidence instead.
+
+The trust boundary is why the request body is so small: a caller may state a
+claim, and nothing else. It cannot declare what counts as proof, assert that
+proof exists, name a collection target, or name its own verdict.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from proofos.journal import JournalUnavailableError, summarize
 from proofos.journal_backend import build_journal_backend
 from proofos.registry import default_registry
 from proofos_agent import scenario
+from proofos_agent.attested_scenario import run_attested_scenario
+from proofos_agent.collector_client import build_collector_client
 from proofos_agent.fleet_scenario import run_scenario
 from proofos_agent.orchestration import MAX_ATTEMPTS
+
+from .config import CollectorMode, RuntimeConfig, build_runtime_config
 
 SERVICE_NAME = "proofos"
 
@@ -50,14 +58,20 @@ JOURNAL = build_journal_backend()
 # process here rather than serving requests with a broken separation.
 REGISTRY = default_registry()
 
+# Misconfiguration stops startup rather than degrading quietly at request time.
+CONFIG: RuntimeConfig = build_runtime_config()
+
 
 class ExecutionRequest(BaseModel):
     """What a caller is allowed to say.
 
-    Only a claim. Evidence requirements and evidence itself belong to the
-    runtime; accepting either from the caller would hand the trust boundary to
-    whoever sends the request.
+    ``extra="forbid"`` is load-bearing: a request carrying ``source``,
+    ``collector_id``, ``request_nonce``, ``status_code``, ``url``, or
+    ``evidence`` is refused rather than having those fields quietly ignored.
+    Silently ignored input is where smuggling hides.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     claim: str = Field(
         default=scenario.WORKER_CLAIM,
@@ -73,67 +87,35 @@ def healthz() -> dict[str, Any]:
     return {"status": "ok", "service": SERVICE_NAME}
 
 
+@app.get("/config")
+def config() -> dict[str, Any]:
+    """How this instance obtains runtime evidence. Carries no key material."""
+    return {
+        "service": SERVICE_NAME,
+        "journal_backend": JOURNAL.backend,
+        **CONFIG.describe(),
+    }
+
+
 @app.get("/")
 def root() -> dict[str, Any]:
     return {
         "service": SERVICE_NAME,
         "invariant": "no claim of completion without independent evidence",
-        "endpoints": ["/healthz", "/executions", "/executions/{execution_id}"],
-        "journal_backend": JOURNAL.backend,
+        "endpoints": [
+            "/healthz",
+            "/config",
+            "/executions",
+            "/executions/{execution_id}",
+        ],
+        "collector_mode": str(CONFIG.mode),
     }
 
 
-def _health_target() -> str:
-    """The endpoint the runtime probe should observe.
-
-    Defaults to this service's own health endpoint so a Cloud Run deployment
-    collects evidence over a real network hop rather than from a fixture.
-    """
-    configured = os.environ.get("PROOFOS_HEALTH_URL")
-    if configured:
-        return configured
-    port = os.environ.get("PORT", "8080")
-    return f"http://127.0.0.1:{port}/healthz"
-
-
-@app.post("/executions")
-async def create_execution(request: ExecutionRequest) -> dict[str, Any]:
-    """Run one bounded verify/recover execution across the separated fleet."""
-    probes: list[dict[str, Any]] = []
-    health_url = _health_target()
-
-    def record_probe(result) -> None:
-        probes.append(
-            {
-                "url": result.url,
-                "outcome": result.outcome.value,
-                "status_code": result.status_code,
-                "detail": result.detail,
-                "satisfies_requirement": result.healthy,
-            }
-        )
-
-    async def probe_runner(fn):
-        # The probe blocks on a socket. Run it in a worker thread so the event
-        # loop stays free -- otherwise the service cannot answer the very
-        # health request it is trying to observe.
-        result = await run_in_threadpool(fn)
-        record_probe(result)
-        return result
-
-    outcome, journal, ledger = await run_scenario(
-        sink=JOURNAL.append_sink,
-        health_url=health_url,
-        registry=REGISTRY,
-        claim_text=request.claim,
-        max_attempts=request.max_attempts,
-        probe_runner=probe_runner,
-    )
-
+def _response(outcome: dict[str, Any], ledger) -> dict[str, Any]:
     return {
-        "health_endpoint": health_url,
         "journal_backend": JOURNAL.backend,
-        "probes": probes,
+        **CONFIG.describe(),
         "evidence": [
             {
                 "kind": item.kind,
@@ -145,6 +127,54 @@ async def create_execution(request: ExecutionRequest) -> dict[str, Any]:
         ],
         **outcome,
     }
+
+
+async def _offload(fn):
+    # A collector call blocks on a socket. Run it in a worker thread so the
+    # event loop stays free -- otherwise this service cannot answer the very
+    # health request the collector is probing.
+    return await run_in_threadpool(fn)
+
+
+async def _run_remote_execution(request: ExecutionRequest) -> dict[str, Any]:
+    """Obtain runtime evidence from the separate collector, or abstain."""
+    client = build_collector_client(
+        CONFIG.collector_url, CONFIG.client_timeout, CONFIG.auth
+    )
+
+    outcome, _journal, ledger = await run_attested_scenario(
+        sink=JOURNAL.append_sink,
+        collector_public_key_b64=CONFIG.public_key_b64,
+        client=client,
+        registry=REGISTRY,
+        claim_text=request.claim,
+        max_attempts=request.max_attempts,
+        probe_runner=_offload,
+        collector_id=CONFIG.collector_id,
+        profile_id=CONFIG.profile_id,
+    )
+    return _response(outcome, ledger)
+
+
+async def _run_inprocess_execution(request: ExecutionRequest) -> dict[str, Any]:
+    """Deterministic in-process collection. Explicitly not a deployment mode."""
+    outcome, _journal, ledger = await run_scenario(
+        sink=JOURNAL.append_sink,
+        health_url=scenario.health_url(),
+        registry=REGISTRY,
+        claim_text=request.claim,
+        max_attempts=request.max_attempts,
+        probe_runner=_offload,
+    )
+    return _response(outcome, ledger)
+
+
+@app.post("/executions")
+async def create_execution(request: ExecutionRequest) -> dict[str, Any]:
+    """Run one bounded verify/recover execution across the separated fleet."""
+    if CONFIG.mode is CollectorMode.REMOTE:
+        return await _run_remote_execution(request)
+    return await _run_inprocess_execution(request)
 
 
 @app.get("/executions/{execution_id}")
