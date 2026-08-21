@@ -68,6 +68,7 @@ class RuntimeConfig:
     client_timeout: float = 15.0
     auth: str = AUTH_AUTO
     agent_runtime: AgentRuntime = AgentRuntime.DETERMINISTIC
+    model: str = ""
 
     @property
     def is_remote(self) -> bool:
@@ -83,6 +84,9 @@ class RuntimeConfig:
             "collector_auth": self.auth,
             "agent_runtime": str(self.agent_runtime),
             "live_model_enabled": self.agent_runtime is AgentRuntime.GEMINI,
+            # The model a live run would call. Reported even in deterministic
+            # mode so what "live" would mean is inspectable before enabling it.
+            "model": self.model,
         }
 
 
@@ -118,6 +122,8 @@ def build_runtime_config(env: dict[str, str] | None = None) -> RuntimeConfig:
             f"allowed: {[r.value for r in AgentRuntime]}"
         ) from exc
 
+    from proofos_agent.agent import MODEL as GEMINI_MODEL
+
     if agent_runtime is AgentRuntime.GEMINI:
         # Fail here, not at the first request. A service advertising a live
         # model must not start without one.
@@ -134,6 +140,7 @@ def build_runtime_config(env: dict[str, str] | None = None) -> RuntimeConfig:
             collector_id=collector_id,
             profile_id=profile_id,
             agent_runtime=agent_runtime,
+            model=GEMINI_MODEL,
         )
 
     url = source.get(URL_ENV, "").strip()
@@ -170,4 +177,5 @@ def build_runtime_config(env: dict[str, str] | None = None) -> RuntimeConfig:
         client_timeout=timeout,
         auth=auth,
         agent_runtime=agent_runtime,
+        model=GEMINI_MODEL,
     )

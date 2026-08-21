@@ -254,3 +254,39 @@ class LiveContainerFailsClosedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfigReportsTheModelTests(unittest.TestCase):
+    """What a live run would call, inspectable before enabling it."""
+
+    def test_config_names_the_model_in_both_modes(self):
+        from proofos_agent.agent import MODEL
+        from proofos_service.config import build_runtime_config
+
+        described = build_runtime_config(
+            {"PROOFOS_COLLECTOR_MODE": "inprocess-test-only"}
+        ).describe()
+        self.assertEqual(described["model"], MODEL)
+        self.assertTrue(described["model"].startswith("gemini-3"))
+        self.assertFalse(described["live_model_enabled"])
+
+    def test_config_carries_no_credential_value(self):
+        from proofos_service.config import build_runtime_config
+
+        saved = os.environ.get("GOOGLE_API_KEY")
+        os.environ["GOOGLE_API_KEY"] = "placeholder-not-a-real-credential"
+        try:
+            described = build_runtime_config(
+                {
+                    "PROOFOS_COLLECTOR_MODE": "inprocess-test-only",
+                    "PROOFOS_AGENT_RUNTIME": "gemini",
+                }
+            ).describe()
+        finally:
+            if saved is None:
+                os.environ.pop("GOOGLE_API_KEY", None)
+            else:
+                os.environ["GOOGLE_API_KEY"] = saved
+
+        self.assertTrue(described["live_model_enabled"])
+        self.assertNotIn("placeholder", str(described))
