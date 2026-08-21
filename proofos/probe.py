@@ -12,6 +12,8 @@ could itself become an unverified trust assumption.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import socket
 import urllib.error
@@ -63,6 +65,9 @@ class ProbeResult:
     url: str
     status_code: int | None = None
     collector: str = COLLECTOR_ID
+    #: Digest of exactly the bytes received, so an attestation can commit to
+    #: the response without carrying it.
+    body_digest: str = ""
 
     @property
     def healthy(self) -> bool:
@@ -79,9 +84,17 @@ class ProbeResult:
         }
 
 
+def digest_bytes(body: bytes) -> str:
+    """Digest of a response body, over a stable encoding of the raw bytes."""
+    return hashlib.sha256(base64.b64encode(body)).hexdigest()
+
+
 def probe_health(
     url: str,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    max_bytes: int = MAX_BODY_BYTES,
+    expected_status_field: str = "status",
+    expected_status_value: str = "ok",
 ) -> ProbeResult:
     """GET ``url`` and report the observed health of the service.
 
@@ -101,7 +114,7 @@ def probe_health(
                     detail=f"{url} redirected to {final_url}; refusing to follow",
                     url=url,
                 )
-            body = response.read(MAX_BODY_BYTES)
+            body = response.read(max_bytes)
     except _RedirectRefused as exc:
         return ProbeResult(
             outcome=ProbeOutcome.REDIRECTED,
@@ -143,12 +156,15 @@ def probe_health(
             url=url,
         )
 
+    digest = digest_bytes(body)
+
     if status is None or not 200 <= status < 300:
         return ProbeResult(
             outcome=ProbeOutcome.UNHEALTHY_STATUS,
             detail=f"HTTP {status} from {url}",
             url=url,
             status_code=status,
+            body_digest=digest,
         )
 
     try:
@@ -159,28 +175,32 @@ def probe_health(
             detail=f"HTTP {status} from {url} with a non-JSON body",
             url=url,
             status_code=status,
+            body_digest=digest,
         )
 
-    if not isinstance(payload, dict) or "status" not in payload:
+    if not isinstance(payload, dict) or expected_status_field not in payload:
         return ProbeResult(
             outcome=ProbeOutcome.MALFORMED_RESPONSE,
-            detail=f"HTTP {status} from {url} without a 'status' field",
+            detail=f"HTTP {status} from {url} without the expected status field",
             url=url,
             status_code=status,
+            body_digest=digest,
         )
 
-    reported = payload.get("status")
-    if reported != "ok":
+    reported = payload.get(expected_status_field)
+    if reported != expected_status_value:
         return ProbeResult(
             outcome=ProbeOutcome.UNHEALTHY_STATUS,
             detail=f"HTTP {status} from {url} reporting status={reported!r}",
             url=url,
             status_code=status,
+            body_digest=digest,
         )
 
     return ProbeResult(
         outcome=ProbeOutcome.HEALTHY,
-        detail=f"HTTP {status} from {url} reporting status='ok'",
+        detail=f"HTTP {status} from {url} reporting {expected_status_field}={reported!r}",
         url=url,
         status_code=status,
+        body_digest=digest,
     )
