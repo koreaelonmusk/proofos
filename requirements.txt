@@ -1,1 +1,5 @@
 google-adk>=2.7,<3
+# Used directly by proofos_service, so pinned explicitly rather than relied on
+# as a transitive dependency of google-adk.
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
