@@ -31,6 +31,15 @@ class CredentialsMissingError(RuntimeError):
     pass
 
 
+def load_env_file() -> None:
+    """Load .env if present, matching the documented setup flow."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv()
+
+
 def preflight() -> str:
     """Confirm a credential path exists before attempting a live model call."""
     if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").upper() in {"TRUE", "1"}:
@@ -79,6 +88,7 @@ async def run_live_turn(runner: InMemoryRunner, session_id: str, attempt: int) -
 
 
 async def main() -> int:
+    load_env_file()
     credential_mode = preflight()
 
     LEDGER.reset()
