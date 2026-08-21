@@ -106,14 +106,34 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body["final_status"], "VERIFIED")
 
-        decisions = [a["verifier_decision"]["status"] for a in body["attempts"]]
-        self.assertEqual(decisions, ["ABSTAIN", "VERIFIED"])
-        self.assertEqual(body["attempts"][0]["verifier_decision"]["missing"], ["runtime"])
+        self.assertEqual(
+            [d["status"] for d in body["decisions"]], ["ABSTAIN", "VERIFIED"]
+        )
+        self.assertEqual(body["decisions"][0]["missing"], ["runtime"])
+        self.assertEqual(body["decisions"][0]["failure"], "EVIDENCE_UNTRUSTED")
 
         # Evidence came from a real probe of a real endpoint.
         self.assertEqual(len(body["probes"]), 1)
         self.assertEqual(body["probes"][0]["outcome"], "HEALTHY")
         self.assertTrue(body["probes"][0]["satisfies_requirement"])
+
+    def test_response_shows_which_agent_produced_which_evidence(self):
+        _, body = self.service.post("/executions", {"claim": "Bug fixed"})
+        by_source = {(e["kind"], e["source"]): e["collector"] for e in body["evidence"]}
+        # The executor's runtime claim and the collector's observation coexist;
+        # only one of them can satisfy the requirement.
+        self.assertEqual(by_source[("runtime", "EXECUTOR")], "executor-v1")
+        self.assertEqual(by_source[("runtime", "OBSERVED")], "collector-http-v1")
+        self.assertEqual(by_source[("tests", "OBSERVED")], "collector-ci-v1")
+
+        roles = {a["agent_id"]: a["role"] for a in body["agents"]}
+        self.assertEqual(roles["executor-v1"], "executor")
+        self.assertNotIn(
+            "write_observed_evidence",
+            next(a for a in body["agents"] if a["agent_id"] == "executor-v1")[
+                "capabilities"
+            ],
+        )
 
     def test_audit_trail_is_retrievable_for_an_execution(self):
         _, body = self.service.post("/executions", {"claim": "Bug fixed"})
@@ -167,7 +187,7 @@ class ServiceTests(unittest.TestCase):
         # Each execution starts from its own ledger, so the second must be
         # refused on its first attempt exactly like the first was. A shared
         # ledger would let the earlier probe satisfy the later execution.
-        self.assertEqual(second["attempts"][0]["verifier_decision"]["status"], "ABSTAIN")
+        self.assertEqual(second["decisions"][0]["status"], "ABSTAIN")
         self.assertEqual(len(second["probes"]), 1)
 
 
@@ -223,7 +243,7 @@ class ServiceTrustBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(body["final_status"], "ABSTAIN")
         self.assertEqual(body["failure_class"], "RETRY_EXHAUSTED")
-        self.assertEqual(len(body["attempts"]), 3)
+        self.assertEqual(len(body["decisions"]), 3)
 
     def test_max_attempts_is_capped(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:

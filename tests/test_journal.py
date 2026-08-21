@@ -31,7 +31,8 @@ from proofos.journal import (
     verify_events,
 )
 from proofos_agent import scenario
-from proofos_agent.agent import LEDGER, verify_task_completion
+from proofos.ledger import EvidenceLedger
+from proofos_agent.verification_tool import build_verification_tool
 from proofos_agent.recovery import Turn, run_verification_loop
 from tests.test_probe import closed_port_url, send_json, serving
 
@@ -40,14 +41,19 @@ def run(coro):
     return asyncio.run(coro)
 
 
-async def compliant_turn(attempt: int) -> Turn:
-    turn = Turn(attempt=attempt)
-    args = {"task_id": scenario.TASK_ID, "claim": scenario.WORKER_CLAIM}
-    turn.tool_calls.append({"name": "verify_task_completion", "args": args})
-    result = verify_task_completion(**args)
-    turn.tool_results.append(result)
-    turn.final_text = result["status"]
-    return turn
+def make_compliant_turn(tool):
+    """A stand-in for a model that obeys its instruction and calls the tool."""
+
+    async def compliant_turn(attempt: int) -> Turn:
+        turn = Turn(attempt=attempt)
+        args = {"task_id": scenario.TASK_ID, "claim": scenario.WORKER_CLAIM}
+        turn.tool_calls.append({"name": "verify_task_completion", "args": args})
+        result = tool(**args)
+        turn.tool_results.append(result)
+        turn.final_text = result["status"]
+        return turn
+
+    return compliant_turn
 
 
 async def self_certifying_turn(attempt: int) -> Turn:
@@ -73,7 +79,10 @@ def draft(execution_id="exec_test", sequence_hint=0, **overrides):
 
 class JournalRecordingTests(unittest.TestCase):
     def setUp(self):
-        LEDGER.reset()
+        LEDGER = EvidenceLedger()
+        self.LEDGER = LEDGER
+        self.verify_task_completion = build_verification_tool(LEDGER)
+        self.compliant_turn = make_compliant_turn(self.verify_task_completion)
         scenario.seed_incomplete_evidence(LEDGER)
         self.sink = InMemoryJournalSink()
         self.journal = Journal(self.sink, task_id=scenario.TASK_ID)
@@ -82,14 +91,14 @@ class JournalRecordingTests(unittest.TestCase):
         self.addCleanup(self._server.__exit__, None, None, None)
         self.collectors = {
             "runtime": functools.partial(
-                scenario.collect_runtime_evidence, LEDGER, self.health_url, 5
+                scenario.collect_runtime_evidence, self.LEDGER, self.health_url, 5
             )
         }
 
     def test_full_execution_is_reconstructable_from_the_journal(self):
         outcome = run(
             run_verification_loop(
-                compliant_turn, self.collectors, 2, journal=self.journal
+                self.compliant_turn, self.collectors, 2, journal=self.journal
             )
         )
         self.assertEqual(outcome["final_status"], "VERIFIED")
@@ -113,7 +122,7 @@ class JournalRecordingTests(unittest.TestCase):
     def test_sequences_are_contiguous_and_chained(self):
         run(
             run_verification_loop(
-                compliant_turn, self.collectors, 2, journal=self.journal
+                self.compliant_turn, self.collectors, 2, journal=self.journal
             )
         )
         events = self.journal.events()
@@ -128,7 +137,7 @@ class JournalRecordingTests(unittest.TestCase):
     def test_every_event_carries_correlation_ids(self):
         run(
             run_verification_loop(
-                compliant_turn, self.collectors, 2, journal=self.journal
+                self.compliant_turn, self.collectors, 2, journal=self.journal
             )
         )
         for event in self.journal.events():
@@ -154,11 +163,11 @@ class JournalRecordingTests(unittest.TestCase):
     def test_failed_collection_is_recorded_as_rejected(self):
         collectors = {
             "runtime": functools.partial(
-                scenario.collect_runtime_evidence, LEDGER, closed_port_url(), 2
+                scenario.collect_runtime_evidence, self.LEDGER, closed_port_url(), 2
             )
         }
         outcome = run(
-            run_verification_loop(compliant_turn, collectors, 2, journal=self.journal)
+            run_verification_loop(self.compliant_turn, collectors, 2, journal=self.journal)
         )
         self.assertEqual(outcome["final_status"], "ABSTAIN")
         types = [e.event for e in self.journal.events()]
@@ -182,21 +191,24 @@ class AuditLossTests(unittest.TestCase):
             return super().append(draft)
 
     def setUp(self):
-        LEDGER.reset()
+        LEDGER = EvidenceLedger()
+        self.LEDGER = LEDGER
+        self.verify_task_completion = build_verification_tool(LEDGER)
+        self.compliant_turn = make_compliant_turn(self.verify_task_completion)
         scenario.seed_incomplete_evidence(LEDGER)
         self._server = serving(lambda h: send_json(h, 200, {"status": "ok"}))
         self.health_url = self._server.__enter__()
         self.addCleanup(self._server.__exit__, None, None, None)
         self.collectors = {
             "runtime": functools.partial(
-                scenario.collect_runtime_evidence, LEDGER, self.health_url, 5
+                scenario.collect_runtime_evidence, self.LEDGER, self.health_url, 5
             )
         }
 
     def test_storage_failure_cannot_produce_verified(self):
         journal = Journal(self.BrokenSink(), task_id=scenario.TASK_ID)
         outcome = run(
-            run_verification_loop(compliant_turn, self.collectors, 2, journal=journal)
+            run_verification_loop(self.compliant_turn, self.collectors, 2, journal=journal)
         )
         # The verifier itself would have reached VERIFIED on attempt 2.
         self.assertEqual(
@@ -210,7 +222,7 @@ class AuditLossTests(unittest.TestCase):
     def test_partial_storage_failure_also_downgrades(self):
         journal = Journal(self.FlakySink(), task_id=scenario.TASK_ID)
         outcome = run(
-            run_verification_loop(compliant_turn, self.collectors, 2, journal=journal)
+            run_verification_loop(self.compliant_turn, self.collectors, 2, journal=journal)
         )
         self.assertEqual(outcome["final_status"], "ABSTAIN")
         self.assertEqual(outcome["failure_class"], "AUDIT_UNAVAILABLE")

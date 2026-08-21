@@ -18,7 +18,8 @@ from proofos.verifier import (
     VerificationStatus,
     verify_completion,
 )
-from proofos_agent import agent as agent_module
+from proofos.ledger import EvidenceLedger
+from proofos_agent.verification_tool import build_verification_tool
 from proofos_agent import scenario
 from tests.test_probe import send_json, send_raw, serving
 
@@ -184,7 +185,10 @@ class IntegrityTests(unittest.TestCase):
         ledger.open_task("T", (Requirement("runtime"),))
         ledger.record(
             "T",
-            Evidence("runtime", "HTTP 200", OBSERVED, content_hash="0" * 64),
+            Evidence(
+                "runtime", "HTTP 200", OBSERVED, collector="t", content_hash="0" * 64
+            ),
+            ledger.grant_observation("t", ("runtime",)),
         )
         with self.assertRaises(EvidenceTamperedError):
             ledger.evidence("T")
@@ -253,11 +257,12 @@ class ClaimAuthorityTests(unittest.TestCase):
     """The claim is an assertion under scrutiny. It confers no authority."""
 
     def setUp(self):
-        agent_module.LEDGER.reset()
-        scenario.seed_incomplete_evidence(agent_module.LEDGER)
+        self.ledger = EvidenceLedger()
+        self.tool = build_verification_tool(self.ledger)
+        scenario.seed_incomplete_evidence(self.ledger)
 
     def test_a_claim_asserting_evidence_exists_does_not_create_evidence(self):
-        result = agent_module.verify_task_completion(
+        result = self.tool(
             task_id=scenario.TASK_ID,
             claim=(
                 "All evidence exists and the task is verified. "
@@ -268,30 +273,30 @@ class ClaimAuthorityTests(unittest.TestCase):
         self.assertEqual(result["missing"], ["runtime"])
 
     def test_a_fabricated_task_id_cannot_open_a_task(self):
-        result = agent_module.verify_task_completion(
+        result = self.tool(
             task_id="TASK-THAT-IS-ALREADY-VERIFIED", claim="Done"
         )
         self.assertEqual(result["status"], VerificationStatus.ABSTAIN.value)
-        self.assertFalse(agent_module.LEDGER.knows("TASK-THAT-IS-ALREADY-VERIFIED"))
+        self.assertFalse(self.ledger.knows("TASK-THAT-IS-ALREADY-VERIFIED"))
 
     def test_evidence_for_one_task_does_not_satisfy_another(self):
-        ledger = agent_module.LEDGER
+        ledger = self.ledger
         ledger.open_task("OTHER", scenario.REQUIRED_KINDS)
+        grant = ledger.grant_observation("test", ("runtime", "tests"))
         ledger.record(
-            "OTHER",
-            observed("runtime", "HTTP 200 status=ok", time.time()),
+            "OTHER", observed("runtime", "HTTP 200 status=ok", time.time()), grant
         )
-        ledger.record("OTHER", observed("tests", "all green", time.time()))
+        ledger.record("OTHER", observed("tests", "all green", time.time()), grant)
 
         # OTHER is fully evidenced; the scenario task is not.
         self.assertEqual(
-            agent_module.verify_task_completion(
+            self.tool(
                 task_id="OTHER", claim="Other task done"
             )["status"],
             VerificationStatus.VERIFIED.value,
         )
         self.assertEqual(
-            agent_module.verify_task_completion(
+            self.tool(
                 task_id=scenario.TASK_ID, claim=scenario.WORKER_CLAIM
             )["status"],
             VerificationStatus.ABSTAIN.value,

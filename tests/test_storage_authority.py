@@ -145,6 +145,7 @@ class CrossTaskReplayTests(unittest.TestCase):
 
     def fully_evidence(self, task_id):
         self.ledger.open_task(task_id, scenario.REQUIRED_KINDS)
+        grant = self.ledger.grant_observation("test", ("tests", "runtime"))
         for kind in ("tests", "runtime"):
             self.ledger.record(
                 task_id,
@@ -155,6 +156,7 @@ class CrossTaskReplayTests(unittest.TestCase):
                     collected_at=self.now,
                     collector="test",
                 ),
+                grant,
             )
 
     def test_evidence_for_one_task_does_not_satisfy_another(self):
@@ -176,13 +178,22 @@ class CrossTaskReplayTests(unittest.TestCase):
         # the fact that something was once verified.
         stale = self.now - 10_000
         self.ledger.open_task("TASK-X", scenario.REQUIRED_KINDS)
+        grant = self.ledger.grant_observation("test", ("tests", "runtime"))
         self.ledger.record(
             "TASK-X",
-            Evidence("tests", "green", EvidenceSource.OBSERVED, collected_at=stale),
+            Evidence(
+                "tests", "green", EvidenceSource.OBSERVED,
+                collected_at=stale, collector="test",
+            ),
+            grant,
         )
         self.ledger.record(
             "TASK-X",
-            Evidence("runtime", "HTTP 200", EvidenceSource.OBSERVED, collected_at=stale),
+            Evidence(
+                "runtime", "HTTP 200", EvidenceSource.OBSERVED,
+                collected_at=stale, collector="test",
+            ),
+            grant,
         )
         result = self.verify_tool(task_id="TASK-X", claim="still healthy?")
         self.assertEqual(result["status"], VerificationStatus.ABSTAIN.value)
@@ -212,13 +223,14 @@ class ModelWritePathTests(unittest.TestCase):
     """The model can name a task and state a claim. Nothing else."""
 
     def test_the_agent_has_exactly_one_tool_and_it_writes_nothing(self):
-        self.assertEqual(len(agent_module.root_agent.tools), 1)
+        agent = agent_module.build_verifier_agent(EvidenceLedger())
+        self.assertEqual(len(agent.tools), 1)
 
     def test_the_tool_signature_exposes_no_storage_or_evidence_parameter(self):
         from google.adk.tools import FunctionTool
 
         declaration = FunctionTool(
-            agent_module.verify_task_completion
+            build_verification_tool(EvidenceLedger())
         )._get_declaration()
         dumped = declaration.model_dump(exclude_none=True)
         schema = dumped.get("parameters_json_schema") or dumped.get("parameters")
