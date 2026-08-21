@@ -66,6 +66,23 @@ exactly those and re-verifies. The loop terminates on `VERIFIED`, on an
 exhausted retry budget, or when no collector exists for what is missing. It
 never converts a failure into a success.
 
+## Deployment shape
+
+```text
+Cloud Run service (proofos_service.app)
+  GET  /healthz                     health, in the probe's contract shape
+  POST /executions                  bounded verify -> recover -> re-verify
+  GET  /executions/{execution_id}   audit replay
+```
+
+The service's health endpoint satisfies the probe contract, so a deployed
+ProofOS can be the target of a real probe rather than a simulated one. The probe
+runs in a worker thread: blocking it on the event loop would stop the service
+answering the request it is trying to observe.
+
+Each execution owns its own ledger. A shared one would let one request's
+evidence satisfy another request's claim.
+
 ## Current P0
 
 The verification kernel, the ledger trust boundary, the ADK tool wiring, and the

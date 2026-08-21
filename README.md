@@ -143,11 +143,16 @@ User Goal
 │   └── journal.py           # append-only execution journal (audit trail)
 ├── proofos_agent/
 │   ├── __init__.py
-│   ├── agent.py             # Gemini 3.5 Flash / ADK agent + verification tool
+│   ├── agent.py             # Gemini 3.5 Flash / ADK agent
+│   ├── verification_tool.py # the tool, bound to an explicit ledger
 │   ├── scenario.py          # P0 demo scenario and evidence collectors
 │   ├── recovery.py          # bounded ABSTAIN -> collect -> re-verify loop
 │   ├── demo_service.py      # local health endpoint for the probe to hit
 │   └── run_demo.py          # live Gemini + ADK entrypoint
+├── proofos_service/
+│   ├── __init__.py
+│   └── app.py               # HTTP service for Cloud Run
+├── Dockerfile               # Cloud Run container
 ├── tests/
 │   ├── test_verifier.py     # contract and threat-model coverage
 │   ├── test_agent_contract.py  # proves the model cannot assert evidence
@@ -155,6 +160,7 @@ User Goal
 │   ├── test_runtime_evidence.py  # probe -> ledger -> verifier, fail-closed
 │   ├── test_adversarial.py  # attempts to manufacture a VERIFIED
 │   ├── test_journal.py      # audit trail recording, integrity, replay
+│   ├── test_service.py      # service over a real socket
 │   └── test_recovery.py     # recovery loop against the real verifier
 ├── docs/
 │   └── architecture.md
@@ -236,6 +242,30 @@ Expected sequence: attempt 1 returns `ABSTAIN` with `missing: ["runtime"]`
 because runtime evidence is only self-reported; recovery collects an independent
 runtime probe; attempt 2 returns `VERIFIED`.
 
+## Run the service locally
+
+```bash
+uvicorn proofos_service.app:app --port 8080
+```
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /healthz` | Health in the exact shape the ProofOS probe requires |
+| `POST /executions` | Run one bounded verify/recover execution |
+| `GET /executions/{execution_id}` | Replay the audit trail for a decision |
+
+```bash
+curl -s localhost:8080/executions -H 'content-type: application/json'      -d '{"claim":"Production bug BUG-4417 is fixed and the service is healthy."}'
+```
+
+The request body carries only a claim. There is no field through which a caller
+can supply evidence, declare requirements, or name its own verdict — accepting
+any of those would hand the trust boundary to whoever sends the request.
+
+Because the service's own `/healthz` satisfies the probe contract, a deployed
+ProofOS is a valid target for a real probe. That is what makes cloud evidence
+collection genuine rather than simulated.
+
 ## Deploy to Cloud Run
 
 From the repository root:
@@ -291,8 +321,13 @@ After deployment, preserve the generated `.run.app` URL plus Cloud Run / Vertex 
   local health service unless `PROOFOS_HEALTH_URL` points at a deployment.
 - Only one evidence kind is collected live. Test evidence is still a recorded
   CI result rather than a freshly executed suite.
-- Cloud Run deployment is documented but not yet proven end to end.
-- Observability (Cloud Logging / OpenTelemetry traces) is not yet instrumented.
+- Cloud Run deployment is **not proven**. The container and service are built
+  and tested locally over a real socket, but no deployment has been attempted
+  and no `.run.app` endpoint exists.
+- Journal events are emitted in the JSON shape Cloud Logging ingests from
+  stdout, but this has **not been observed in Cloud Logging** — only locally.
+- There is no multi-agent separation yet. Orchestrator, verifier, and collector
+  are distinct roles in code and in the journal, but a single process runs them.
 
 ## Hackathon disclosure
 
