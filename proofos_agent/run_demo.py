@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import json
 import os
@@ -21,6 +22,7 @@ from google.genai import types
 
 from proofos_agent import scenario
 from proofos_agent.agent import LEDGER, MODEL, root_agent
+from proofos_agent.demo_service import running_health_service
 from proofos_agent.recovery import MAX_ATTEMPTS, Turn, run_verification_loop
 
 APP_NAME = "proofos"
@@ -58,6 +60,22 @@ def preflight() -> str:
         "GOOGLE_GENAI_USE_VERTEXAI=TRUE with GOOGLE_CLOUD_PROJECT and "
         "GOOGLE_CLOUD_LOCATION (see .env.example)."
     )
+
+
+@contextlib.contextmanager
+def health_endpoint():
+    """Yield the URL the runtime probe should target.
+
+    If PROOFOS_HEALTH_URL is set, probe that service -- point it at Cloud Run to
+    collect evidence from the real deployment. Otherwise start the local demo
+    service so the probe still crosses a real socket.
+    """
+    configured = os.environ.get("PROOFOS_HEALTH_URL")
+    if configured:
+        yield configured, "configured"
+        return
+    with running_health_service() as url:
+        yield url, "local-demo-service"
 
 
 async def run_live_turn(runner: InMemoryRunner, session_id: str, attempt: int) -> Turn:
@@ -99,22 +117,39 @@ async def main() -> int:
         app_name=APP_NAME, user_id=USER_ID
     )
 
-    collectors = {
-        kind: functools.partial(collect, LEDGER)
-        for kind, collect in scenario.COLLECTORS.items()
-    }
+    probes: list[dict] = []
 
-    outcome = await run_verification_loop(
-        run_turn=functools.partial(run_live_turn, runner, session.id),
-        collectors=collectors,
-        max_attempts=MAX_ATTEMPTS,
-    )
+    with health_endpoint() as (health_url, endpoint_kind):
+
+        def collect_runtime() -> None:
+            """Recovery step: a real HTTP probe against a real endpoint."""
+            result = scenario.collect_runtime_evidence(
+                LEDGER, health_url, scenario.health_timeout()
+            )
+            probes.append(
+                {
+                    "url": result.url,
+                    "outcome": result.outcome.value,
+                    "status_code": result.status_code,
+                    "detail": result.detail,
+                    "recorded_as_observed_evidence": result.observed_response,
+                    "satisfies_requirement": result.healthy,
+                }
+            )
+
+        outcome = await run_verification_loop(
+            run_turn=functools.partial(run_live_turn, runner, session.id),
+            collectors={"runtime": collect_runtime},
+            max_attempts=MAX_ATTEMPTS,
+        )
 
     report = {
         "model": MODEL,
         "credential_mode": credential_mode,
+        "health_endpoint": {"url": health_url, "kind": endpoint_kind},
         "task_id": scenario.TASK_ID,
         "claim": scenario.WORKER_CLAIM,
+        "probes": probes,
         **outcome,
     }
     print(json.dumps(report, indent=2))
