@@ -24,12 +24,36 @@ DEFAULT_TIMEOUT_SECONDS = 5.0
 MAX_BODY_BYTES = 64 * 1024
 
 
+COLLECTOR_ID = "proofos.probe.http"
+
+
 class ProbeOutcome(StrEnum):
     HEALTHY = "HEALTHY"
     UNHEALTHY_STATUS = "UNHEALTHY_STATUS"
     MALFORMED_RESPONSE = "MALFORMED_RESPONSE"
+    REDIRECTED = "REDIRECTED"
     TIMEOUT = "TIMEOUT"
     UNREACHABLE = "UNREACHABLE"
+
+
+class _RedirectRefused(urllib.error.HTTPError):
+    """Raised instead of following a redirect."""
+
+
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so evidence always describes the host we asked.
+
+    Following a redirect would let whoever controls the health URL point the
+    probe at a machine of their choosing while the recorded evidence still named
+    the original address. That is forged provenance, so a redirect is reported
+    rather than followed.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise _RedirectRefused(req.full_url, code, f"redirect to {newurl}", headers, fp)
+
+
+_OPENER = urllib.request.build_opener(_NoRedirects())
 
 
 @dataclass(frozen=True)
@@ -38,6 +62,7 @@ class ProbeResult:
     detail: str
     url: str
     status_code: int | None = None
+    collector: str = COLLECTOR_ID
 
     @property
     def healthy(self) -> bool:
@@ -65,9 +90,25 @@ def probe_health(
     """
     request = urllib.request.Request(url, method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _OPENER.open(request, timeout=timeout) as response:
             status = getattr(response, "status", None)
+            # A redirect handler cannot see a same-URL rewrite, so confirm the
+            # response really came from the address we asked for.
+            final_url = getattr(response, "url", url)
+            if final_url != url:
+                return ProbeResult(
+                    outcome=ProbeOutcome.REDIRECTED,
+                    detail=f"{url} redirected to {final_url}; refusing to follow",
+                    url=url,
+                )
             body = response.read(MAX_BODY_BYTES)
+    except _RedirectRefused as exc:
+        return ProbeResult(
+            outcome=ProbeOutcome.REDIRECTED,
+            detail=f"{url} returned HTTP {exc.code} {exc.reason}; refusing to follow",
+            url=url,
+            status_code=exc.code,
+        )
     except urllib.error.HTTPError as exc:
         # A real response arrived, carrying an error status.
         return ProbeResult(
