@@ -20,6 +20,13 @@ import sys
 from google.adk.runners import InMemoryRunner
 from google.genai import types
 
+from proofos.journal import (
+    FanoutJournalSink,
+    InMemoryJournalSink,
+    Journal,
+    StreamJournalSink,
+    summarize,
+)
 from proofos_agent import scenario
 from proofos_agent.agent import LEDGER, MODEL, root_agent
 from proofos_agent.demo_service import running_health_service
@@ -117,11 +124,19 @@ async def main() -> int:
         app_name=APP_NAME, user_id=USER_ID
     )
 
+    # Journal lines go to stderr so the report on stdout stays parseable.
+    # On Cloud Run both streams are ingested by Cloud Logging.
+    durable = InMemoryJournalSink()
+    journal = Journal(
+        FanoutJournalSink(StreamJournalSink(sys.stderr), durable),
+        task_id=scenario.TASK_ID,
+    )
+
     probes: list[dict] = []
 
     with health_endpoint() as (health_url, endpoint_kind):
 
-        def collect_runtime() -> None:
+        def collect_runtime():
             """Recovery step: a real HTTP probe against a real endpoint."""
             result = scenario.collect_runtime_evidence(
                 LEDGER, health_url, scenario.health_timeout()
@@ -136,11 +151,13 @@ async def main() -> int:
                     "satisfies_requirement": result.healthy,
                 }
             )
+            return result
 
         outcome = await run_verification_loop(
             run_turn=functools.partial(run_live_turn, runner, session.id),
             collectors={"runtime": collect_runtime},
             max_attempts=MAX_ATTEMPTS,
+            journal=journal,
         )
 
     report = {
@@ -151,6 +168,7 @@ async def main() -> int:
         "claim": scenario.WORKER_CLAIM,
         "probes": probes,
         **outcome,
+        "audit": summarize(journal.events()),
     }
     print(json.dumps(report, indent=2))
     return 0 if outcome["final_status"] == "VERIFIED" else 1
