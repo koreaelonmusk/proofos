@@ -37,8 +37,32 @@ jobs:
           for rec in r.records():
               print(rec.agent_id, rec.role, sorted(rec.capabilities), list(rec.tools))
           "
-      - name: Import service app
-        run: python -c "from proofos_service.app import app; print(app.title, len(app.routes), 'routes')"
+      - name: Provision a collector identity
+        run: |
+          python -m proofos_collector.keygen             --private "$RUNNER_TEMP/collector.pem"             --public  "$RUNNER_TEMP/collector.pub"
+      - name: Import service app in remote (attested) mode
+        env:
+          PROOFOS_COLLECTOR_MODE: remote
+          PROOFOS_COLLECTOR_URL: http://collector:8080
+          PROOFOS_COLLECTOR_AUTH: none
+        run: |
+          export PROOFOS_COLLECTOR_PUBLIC_KEY_FILE="$RUNNER_TEMP/collector.pub"
+          python -c "
+          from proofos_service.app import app, CONFIG
+          print(app.title, len(app.routes), 'routes')
+          print('config:', CONFIG.describe())
+          assert CONFIG.is_remote, 'the deployable service must default to attested evidence'
+          "
+      - name: Refuse to start unconfigured
+        run: |
+          python -c "
+          from proofos_service.config import build_runtime_config, ConfigurationError
+          try:
+              build_runtime_config({})
+          except ConfigurationError as exc:
+              print('refused as expected:', str(exc).split('.')[0]); raise SystemExit(0)
+          raise SystemExit('the service started without knowing which collector to trust')
+          "
       - name: Import collector service
         run: |
           python -c "
@@ -50,3 +74,24 @@ jobs:
         run: python -c "from proofos.firestore_journal import FirestoreJournalSink; from google.cloud import firestore; print('firestore adapter OK', firestore.__name__)"
       - name: Run verification contract tests
         run: python -m unittest discover -s tests -t . -v
+      - name: Build both deployable images
+        run: |
+          docker build -q -t proofos-api:ci -f Dockerfile .
+          docker build -q -t proofos-collector:ci -f Dockerfile.collector .
+          echo "api image:       $(docker images -q proofos-api:ci)"
+          echo "collector image: $(docker images -q proofos-collector:ci)"
+      - name: The API image must ship no collector key material
+        run: |
+          docker run --rm --entrypoint sh proofos-api:ci -c '
+            if [ -d /app/proofos_collector ]; then
+              echo "API image ships the collector package"; exit 1
+            fi
+            found=0
+            for f in $(grep -rl "BEGIN PRIVATE KEY" /run /app /etc /home 2>/dev/null); do
+              if head -c 27 "$f" | grep -q -- "-----BEGIN PRIVATE KEY"; then
+                echo "API image contains key material: $f"; found=1
+              fi
+            done
+            if [ "$found" -ne 0 ]; then exit 1; fi
+            echo "no collector package, no PEM key material"
+          '

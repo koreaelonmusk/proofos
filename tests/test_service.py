@@ -16,8 +16,13 @@ import urllib.request
 
 import uvicorn
 
-from proofos.probe import ProbeOutcome, probe_health
-from proofos_service.app import app
+# The service now refuses to start unless it is told how it obtains runtime
+# evidence. These tests exercise the in-process path, so they say so by name --
+# there is deliberately no way to get it by accident.
+os.environ.setdefault("PROOFOS_COLLECTOR_MODE", "inprocess-test-only")
+
+from proofos.probe import ProbeOutcome, probe_health  # noqa: E402
+from proofos_service.app import app  # noqa: E402
 
 
 def free_port() -> int:
@@ -113,9 +118,13 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(body["decisions"][0]["failure"], "EVIDENCE_UNTRUSTED")
 
         # Evidence came from a real probe of a real endpoint.
-        self.assertEqual(len(body["probes"]), 1)
-        self.assertEqual(body["probes"][0]["outcome"], "HEALTHY")
-        self.assertTrue(body["probes"][0]["satisfies_requirement"])
+        observed = [
+            e
+            for e in body["evidence"]
+            if e["kind"] == "runtime" and e["source"] == "OBSERVED"
+        ]
+        self.assertEqual(len(observed), 1)
+        self.assertTrue(observed[0]["satisfies_requirement"])
 
     def test_response_shows_which_agent_produced_which_evidence(self):
         _, body = self.service.post("/executions", {"claim": "Bug fixed"})
@@ -188,7 +197,9 @@ class ServiceTests(unittest.TestCase):
         # refused on its first attempt exactly like the first was. A shared
         # ledger would let the earlier probe satisfy the later execution.
         self.assertEqual(second["decisions"][0]["status"], "ABSTAIN")
-        self.assertEqual(len(second["probes"]), 1)
+        self.assertEqual(
+            len([e for e in second["evidence"] if e["source"] == "OBSERVED"]), 2
+        )
 
 
 class ServiceTrustBoundaryTests(unittest.TestCase):
@@ -217,18 +228,22 @@ class ServiceTrustBoundaryTests(unittest.TestCase):
         schema = app.openapi()["components"]["schemas"]["ExecutionRequest"]
         self.assertEqual(sorted(schema["properties"]), ["claim", "max_attempts"])
 
-    def test_caller_supplied_evidence_fields_are_ignored(self):
-        status, body = self.service.post(
-            "/executions",
-            {
-                "claim": "Done",
-                "evidence": [{"kind": "runtime", "source": "OBSERVED"}],
-                "status": "VERIFIED",
-                "required_kinds": [],
-            },
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(body["final_status"], "ABSTAIN")
+    def test_caller_supplied_evidence_fields_are_refused(self):
+        # Stronger than ignoring them: an unexpected field is a request the
+        # service refuses to interpret, so nothing can be smuggled in a field
+        # that happens to be dropped.
+        for extra in (
+            {"evidence": [{"kind": "runtime", "source": "OBSERVED"}]},
+            {"source": "OBSERVED"},
+            {"collector_id": "collector-http-v1"},
+            {"request_nonce": "nonce_mine"},
+            {"status_code": 200},
+            {"url": "http://169.254.169.254/"},
+            {"required_kinds": []},
+        ):
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                self.service.post("/executions", {"claim": "Done", **extra})
+            self.assertEqual(caught.exception.code, 422, msg=f"accepted {extra}")
 
     def test_a_claim_asserting_its_own_verification_still_abstains(self):
         _, body = self.service.post(

@@ -615,8 +615,18 @@ class KeySeparationTests(unittest.TestCase):
         signer = AttestationSigner.generate(COLLECTOR)
         public = {n for n in dir(signer) if not n.startswith("_")}
         self.assertEqual(
-            public, {"collector_id", "generate", "public_key_b64", "public_key_bytes", "sign"}
+            public,
+            {
+                "collector_id",
+                "generate",
+                "public_key",
+                "public_key_b64",
+                "public_key_bytes",
+                "sign",
+            },
         )
+        # Every accessor hands out the public half only.
+        self.assertNotIn("private", " ".join(public))
 
     def test_two_collectors_have_different_keys(self):
         a = AttestationSigner.generate(COLLECTOR)

@@ -309,8 +309,27 @@ class ProcessSeparationTests(unittest.TestCase):
         self.assertEqual(outcome["final_status"], "ABSTAIN")
 
 
+def sign_with_impostor(signer, kwargs):
+    from proofos.attestation import Outcome
+
+    return signer.sign(
+        execution_id=kwargs["execution_id"],
+        task_id=kwargs["task_id"],
+        kind=kwargs["evidence_kind"],
+        profile_id=kwargs["profile_id"],
+        request_nonce=kwargs["request_nonce"],
+        observed_at=time.time(),
+        outcome=Outcome.HEALTHY,
+        status_code=200,
+        response_digest_value="0" * 64,
+        detail="forged",
+    )
+
+
 class TransportSelectionTests(unittest.TestCase):
     """Credentials are chosen by the target, not by the caller's optimism."""
+
+    real_public_key = AttestationSigner.generate("collector-http-v1").public_key_b64()
 
     def test_loopback_gets_the_unauthenticated_client(self):
         client = build_collector_client("http://127.0.0.1:9999")
@@ -324,6 +343,37 @@ class TransportSelectionTests(unittest.TestCase):
     def test_the_unauthenticated_client_refuses_a_remote_target(self):
         with self.assertRaises(ValueError):
             HttpCollectorClient("https://proofos-collector-abc.a.run.app")
+
+    def test_explicit_none_allows_a_private_network_target(self):
+        # A container network is neither loopback nor Cloud Run. It has to be
+        # named, and naming it must work.
+        client = build_collector_client("http://collector:8080", auth="none")
+        self.assertIsInstance(client, HttpCollectorClient)
+
+    def test_explicit_google_oidc_is_honoured_for_loopback_too(self):
+        client = build_collector_client("http://127.0.0.1:9999", auth="google-oidc")
+        self.assertIsInstance(client, GoogleIdTokenCollectorClient)
+
+    def test_an_unknown_auth_mode_is_refused(self):
+        with self.assertRaises(ValueError):
+            build_collector_client("http://collector:8080", auth="trust-me")
+
+    def test_unauthenticated_transport_still_verifies_signatures(self):
+        """Dropping transport auth must not drop attestation checking."""
+        from proofos.attestation import AttestationSigner
+
+        impostor = AttestationSigner.generate("collector-http-v1")
+
+        class ForgingClient:
+            def collect(self, **kwargs):
+                return sign_with_impostor(impostor, kwargs).to_dict()
+
+        outcome, _, ledger = run(
+            run_attested_scenario(
+                InMemoryJournalSink(), self.real_public_key, ForgingClient()
+            )
+        )
+        self.assertEqual(outcome["final_status"], "ABSTAIN")
 
     def test_the_google_client_reports_missing_credentials_as_unavailable(self):
         # No ADC in this environment: it must fail closed, not proceed.
