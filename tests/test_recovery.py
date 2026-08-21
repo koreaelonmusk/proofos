@@ -12,6 +12,7 @@ import unittest
 from proofos_agent import scenario
 from proofos_agent.agent import LEDGER, verify_task_completion
 from proofos_agent.recovery import Turn, run_verification_loop
+from tests.test_probe import send_json, serving
 
 
 def run(coro):
@@ -38,8 +39,12 @@ class RecoveryLoopTests(unittest.TestCase):
     def setUp(self):
         LEDGER.reset()
         scenario.seed_incomplete_evidence(LEDGER)
+        self._server = serving(lambda h: send_json(h, 200, {"status": "ok"}))
+        self.health_url = self._server.__enter__()
+        self.addCleanup(self._server.__exit__, None, None, None)
+        # Collectors run the real probe against the live server above.
         self.collectors = {
-            kind: functools.partial(collect, LEDGER)
+            kind: functools.partial(collect, LEDGER, self.health_url, 5)
             for kind, collect in scenario.COLLECTORS.items()
         }
 
@@ -63,8 +68,15 @@ class RecoveryLoopTests(unittest.TestCase):
         self.assertEqual(len(outcome["attempts"]), 1)
 
     def test_retry_budget_is_bounded(self):
-        # A collector that cannot actually obtain the evidence must not loop forever.
-        noop = {"runtime": lambda: None}
+        # A collector probing a dead endpoint must not loop forever.
+        from tests.test_probe import closed_port_url
+
+        dead = closed_port_url()
+        noop = {
+            "runtime": functools.partial(
+                scenario.collect_runtime_evidence, LEDGER, dead, 2
+            )
+        }
         outcome = run(
             run_verification_loop(compliant_agent_turn, noop, max_attempts=3)
         )

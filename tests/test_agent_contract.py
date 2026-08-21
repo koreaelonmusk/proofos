@@ -5,6 +5,7 @@ from google.adk.tools import FunctionTool
 from proofos.verifier import VerificationStatus
 from proofos_agent import agent as agent_module
 from proofos_agent import scenario
+from tests.test_probe import send_json, serving
 
 
 def tool_parameter_names() -> list[str]:
@@ -56,7 +57,9 @@ class ToolTrustBoundaryTests(unittest.TestCase):
 
     def test_tool_verifies_after_recovery_collects_runtime_evidence(self):
         scenario.seed_incomplete_evidence(agent_module.LEDGER)
-        scenario.collect_runtime_evidence(agent_module.LEDGER)
+        # Recovery performs a real HTTP probe against a real server.
+        with serving(lambda h: send_json(h, 200, {"status": "ok"})) as url:
+            scenario.collect_runtime_evidence(agent_module.LEDGER, url, timeout=5)
         result = agent_module.verify_task_completion(
             task_id=scenario.TASK_ID, claim=scenario.WORKER_CLAIM
         )
