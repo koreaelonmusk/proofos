@@ -26,12 +26,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from proofos.journal import Journal, JournalUnavailableError, summarize
+from proofos.journal import JournalUnavailableError, summarize
 from proofos.journal_backend import build_journal_backend
-from proofos.ledger import EvidenceLedger
+from proofos.registry import default_registry
 from proofos_agent import scenario
-from proofos_agent.recovery import MAX_ATTEMPTS, Turn, run_verification_loop
-from proofos_agent.verification_tool import build_verification_tool
+from proofos_agent.fleet_scenario import run_scenario
+from proofos_agent.orchestration import MAX_ATTEMPTS
 
 SERVICE_NAME = "proofos"
 
@@ -45,6 +45,10 @@ app = FastAPI(
 # PROOFOS_JOURNAL_BACKEND=firestore to persist. Every execution also streams its
 # events to stdout, where Cloud Logging picks them up.
 JOURNAL = build_journal_backend()
+
+# Validated and sealed at import. A misconfigured authority model stops the
+# process here rather than serving requests with a broken separation.
+REGISTRY = default_registry()
 
 
 class ExecutionRequest(BaseModel):
@@ -94,36 +98,11 @@ def _health_target() -> str:
 
 @app.post("/executions")
 async def create_execution(request: ExecutionRequest) -> dict[str, Any]:
-    """Run one bounded verify/recover execution and return the decision."""
-    ledger = EvidenceLedger()
-    scenario.seed_incomplete_evidence(ledger)
-
-    journal = Journal(JOURNAL.append_sink, task_id=scenario.TASK_ID)
-
-    verify_tool = build_verification_tool(ledger)
-    claim = request.claim
-
-    async def run_turn(attempt: int) -> Turn:
-        turn = Turn(attempt=attempt)
-        args = {"task_id": scenario.TASK_ID, "claim": claim}
-        turn.tool_calls.append({"name": "verify_task_completion", "args": args})
-        turn.tool_results.append(verify_tool(**args))
-        return turn
-
-    health_url = _health_target()
+    """Run one bounded verify/recover execution across the separated fleet."""
     probes: list[dict[str, Any]] = []
+    health_url = _health_target()
 
-    async def collect_runtime():
-        # The probe blocks on a socket. Run it in a worker thread so the event
-        # loop stays free -- otherwise the service cannot answer the very
-        # health request it is trying to observe, and every concurrent request
-        # stalls behind it.
-        result = await run_in_threadpool(
-            scenario.collect_runtime_evidence,
-            ledger,
-            health_url,
-            scenario.health_timeout(),
-        )
+    def record_probe(result) -> None:
         probes.append(
             {
                 "url": result.url,
@@ -133,21 +112,37 @@ async def create_execution(request: ExecutionRequest) -> dict[str, Any]:
                 "satisfies_requirement": result.healthy,
             }
         )
+
+    async def probe_runner(fn):
+        # The probe blocks on a socket. Run it in a worker thread so the event
+        # loop stays free -- otherwise the service cannot answer the very
+        # health request it is trying to observe.
+        result = await run_in_threadpool(fn)
+        record_probe(result)
         return result
 
-    outcome = await run_verification_loop(
-        run_turn=run_turn,
-        collectors={"runtime": collect_runtime},
+    outcome, journal, ledger = await run_scenario(
+        sink=JOURNAL.append_sink,
+        health_url=health_url,
+        registry=REGISTRY,
+        claim_text=request.claim,
         max_attempts=request.max_attempts,
-        journal=journal,
+        probe_runner=probe_runner,
     )
 
     return {
-        "task_id": scenario.TASK_ID,
-        "claim": claim,
         "health_endpoint": health_url,
         "journal_backend": JOURNAL.backend,
         "probes": probes,
+        "evidence": [
+            {
+                "kind": item.kind,
+                "source": str(item.source),
+                "collector": item.collector,
+                "satisfies_requirement": item.valid,
+            }
+            for item in ledger.evidence(scenario.TASK_ID)
+        ],
         **outcome,
     }
 
