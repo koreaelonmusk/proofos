@@ -231,6 +231,10 @@ class AttestationSigner:
     def generate(cls, collector_id: str) -> "AttestationSigner":
         return cls(Ed25519PrivateKey.generate(), collector_id)
 
+    def public_key(self) -> Ed25519PublicKey:
+        """The public half. There is deliberately no private-key accessor."""
+        return self._key.public_key()
+
     def public_key_bytes(self) -> bytes:
         return self._key.public_key().public_bytes(
             encoding=serialization.Encoding.Raw,

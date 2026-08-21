@@ -18,17 +18,16 @@ at startup for the local harness, and is configuration in production.
 
 from __future__ import annotations
 
-import base64
 import os
 import time
 from typing import Any
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from proofos.attestation import AttestationSigner, Outcome
+from proofos.keys import FileSigningKeyProvider, write_public_key
 from proofos.probe import probe_health
 from proofos.profiles import (
     ProfileRegistry,
@@ -42,7 +41,9 @@ SERVICE_NAME = "proofos-collector"
 
 COLLECTOR_ID_ENV = "PROOFOS_COLLECTOR_ID"
 TARGET_ENV = "PROOFOS_COLLECTOR_TARGET"
-PRIVATE_KEY_ENV = "PROOFOS_COLLECTOR_PRIVATE_KEY"
+# A path, never the key itself. Key material in an environment variable ends up
+# in process listings, crash dumps, and container inspect output.
+PRIVATE_KEY_FILE_ENV = "PROOFOS_COLLECTOR_PRIVATE_KEY_FILE"
 PUBLIC_KEY_FILE_ENV = "PROOFOS_COLLECTOR_PUBKEY_FILE"
 TIMEOUT_ENV = "PROOFOS_COLLECTOR_TIMEOUT"
 
@@ -69,27 +70,31 @@ class CollectRequest(BaseModel):
 
 
 def _load_signer() -> AttestationSigner:
-    """Load or generate the signing key. The private key never leaves here."""
+    """Load the signing key. It is read here and never leaves this process.
+
+    With a key file configured the identity survives a restart, which a service
+    artifact needs: an ephemeral key would silently invalidate every
+    attestation issued before the last deploy. Without one the key is
+    ephemeral, which is fine for a throwaway test and wrong for anything else.
+    """
     collector_id = os.environ.get(COLLECTOR_ID_ENV, DEFAULT_COLLECTOR_ID)
-    encoded = os.environ.get(PRIVATE_KEY_ENV)
-    if encoded:
-        key = Ed25519PrivateKey.from_private_bytes(
-            base64.b64decode(encoded, validate=True)
-        )
-        return AttestationSigner(key, collector_id)
+    key_file = os.environ.get(PRIVATE_KEY_FILE_ENV)
+    if key_file:
+        provider = FileSigningKeyProvider(key_file, create_if_missing=True)
+        return AttestationSigner(provider.load_private_key(), collector_id)
     return AttestationSigner.generate(collector_id)
 
 
 def _publish_public_key(signer: AttestationSigner) -> None:
-    """Write the public key where the harness can read it.
+    """Write the public half so a separately configured API can be given it.
 
-    Only the public half is written, and only if a path was configured.
+    A deployment convenience for handing configuration across, not a trust
+    bootstrap. There is deliberately no endpoint that serves this.
     """
     path = os.environ.get(PUBLIC_KEY_FILE_ENV)
     if not path:
         return
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(signer.public_key_b64())
+    write_public_key(path, signer.public_key())
 
 
 def _load_profiles(collector_id: str) -> ProfileRegistry:
