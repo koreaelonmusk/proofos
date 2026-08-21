@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import time
 
-from proofos.ledger import EvidenceLedger
+from proofos.ledger import EvidenceLedger, ObservationGrant
 from proofos.probe import DEFAULT_TIMEOUT_SECONDS, ProbeResult, probe_health
 from proofos.verifier import Evidence, EvidenceSource, Requirement
 
@@ -44,18 +44,23 @@ def health_timeout() -> float:
 
 
 def seed_incomplete_evidence(ledger: EvidenceLedger, now: float | None = None) -> None:
-    """Open the task with test evidence only; runtime is unobserved."""
+    """Open the task with test evidence only; runtime is unobserved.
+
+    Writing OBSERVED evidence needs a grant, so this takes one for the CI
+    collector rather than writing straight into the ledger.
+    """
     stamp = time.time() if now is None else now
     ledger.open_task(TASK_ID, REQUIRED_KINDS)
     ledger.record(
         TASK_ID,
         Evidence(
             kind="tests",
-            value="ci-run 32461296659: 44 passed, 0 failed, 0 skipped",
+            value="ci-run 32469217999: 159 passed, 0 failed, 0 skipped",
             source=EvidenceSource.OBSERVED,
             collected_at=stamp,
             collector=CI_COLLECTOR,
         ),
+        ledger.grant_observation(CI_COLLECTOR, ("tests",)),
     )
     # The worker also asserts the service is healthy. That is a self-report and
     # must not satisfy the runtime requirement.
@@ -103,6 +108,7 @@ def collect_runtime_evidence(
                 collected_at=time.time(),
                 collector=result.collector,
             ),
+            ledger.grant_observation(result.collector, ("runtime",)),
         )
 
     return result

@@ -23,7 +23,8 @@ from google.genai import types
 from proofos.journal import Journal, summarize
 from proofos.journal_backend import build_journal_backend
 from proofos_agent import scenario
-from proofos_agent.agent import LEDGER, MODEL, root_agent
+from proofos.ledger import EvidenceLedger
+from proofos_agent.agent import MODEL, build_verifier_agent
 from proofos_agent.demo_service import running_health_service
 from proofos_agent.recovery import MAX_ATTEMPTS, Turn, run_verification_loop
 
@@ -111,8 +112,9 @@ async def main() -> int:
     load_env_file()
     credential_mode = preflight()
 
-    LEDGER.reset()
-    scenario.seed_incomplete_evidence(LEDGER)
+    ledger = EvidenceLedger()
+    scenario.seed_incomplete_evidence(ledger)
+    root_agent = build_verifier_agent(ledger)
 
     runner = InMemoryRunner(agent=root_agent, app_name=APP_NAME)
     session = await runner.session_service.create_session(
@@ -136,7 +138,7 @@ async def main() -> int:
         def collect_runtime():
             """Recovery step: a real HTTP probe against a real endpoint."""
             result = scenario.collect_runtime_evidence(
-                LEDGER, health_url, scenario.health_timeout()
+                ledger, health_url, scenario.health_timeout()
             )
             probes.append(
                 {
