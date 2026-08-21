@@ -1,181 +1,135 @@
-"""Run the ProofOS P0 scenario against a live Gemini model via Google ADK.
+"""Drive the ProofOS API and print what actually happened.
 
-This is a real model + tool execution. Nothing about the decision is hard-coded:
-the model must call the verification tool, and the tool reads evidence from a
-ledger the model cannot write to.
+This used to be a second architecture: it ran a live Gemini verifier against the
+*in-process* collector, which meant the one command that looked like a live demo
+exercised a weaker trust path than the deployable service. Two architectures
+means the one you demo is not the one you ship.
 
-Usage:
+So this is now a client. It calls the real API and reports what that instance
+did. Whether the run used live Gemini or deterministic roles, and whether
+evidence came from a separate collector, are properties of the service's
+configuration -- reported by the service, never asserted here.
+
+    uvicorn proofos_service.app:app --port 8080          # or docker compose up
     python -m proofos_agent.run_demo
+
+Exit codes: 0 VERIFIED, 1 ABSTAIN, 2 the API could not be reached.
 """
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import functools
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 
-from google.adk.runners import InMemoryRunner
-from google.genai import types
-
-from proofos.journal import Journal, summarize
-from proofos.journal_backend import build_journal_backend
-from proofos_agent import scenario
-from proofos.ledger import EvidenceLedger
-from proofos_agent.agent import MODEL, build_verifier_agent
-from proofos_agent.demo_service import running_health_service
-from proofos_agent.recovery import MAX_ATTEMPTS, Turn, run_verification_loop
-
-APP_NAME = "proofos"
-USER_ID = "proofos-operator"
+API_URL_ENV = "PROOFOS_API_URL"
+DEFAULT_API_URL = "http://127.0.0.1:8080"
+DEFAULT_CLAIM = "Production bug BUG-4417 is fixed and the service is healthy."
 
 
-class CredentialsMissingError(RuntimeError):
+class ApiUnreachable(RuntimeError):
     pass
 
 
-def load_env_file() -> None:
-    """Load .env if present, matching the documented setup flow."""
+def _get(base: str, path: str) -> dict:
     try:
-        from dotenv import load_dotenv
-    except ImportError:
-        return
-    load_dotenv()
+        with urllib.request.urlopen(f"{base}{path}", timeout=120) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        raise ApiUnreachable(f"GET {path} returned HTTP {exc.code}") from exc
+    except (urllib.error.URLError, OSError) as exc:
+        raise ApiUnreachable(f"GET {path} failed: {type(exc).__name__}") from exc
 
 
-def preflight() -> str:
-    """Confirm a credential path exists before attempting a live model call."""
-    if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").upper() in {"TRUE", "1"}:
-        project = os.environ.get("GOOGLE_CLOUD_PROJECT")
-        location = os.environ.get("GOOGLE_CLOUD_LOCATION")
-        if not project or not location:
-            raise CredentialsMissingError(
-                "Vertex AI mode requires GOOGLE_CLOUD_PROJECT and "
-                "GOOGLE_CLOUD_LOCATION."
+def _post(base: str, path: str, payload: dict) -> dict:
+    request = urllib.request.Request(
+        f"{base}{path}",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        raise ApiUnreachable(f"POST {path} returned HTTP {exc.code}") from exc
+    except (urllib.error.URLError, OSError) as exc:
+        raise ApiUnreachable(f"POST {path} failed: {type(exc).__name__}") from exc
+
+
+def render(config: dict, outcome: dict, audit: dict) -> str:
+    lines = [
+        "=== ProofOS ===",
+        f"  agent runtime : {config.get('agent_runtime')} "
+        f"(live model: {config.get('live_model_enabled')})",
+        f"  collector mode: {config.get('collector_mode')} "
+        f"(attested: {config.get('attested_evidence')})",
+        f"  model         : {outcome.get('model', config.get('model', 'n/a'))}",
+        "",
+        f"  claim   : {outcome.get('claim')}",
+        f"  decision: {outcome.get('final_status')} ({outcome.get('failure_class')})",
+        "",
+        "  verifier decisions (from the tool, not the prose):",
+    ]
+    for decision in outcome.get("decisions", []):
+        lines.append(
+            f"    attempt {decision['attempt']}: {decision['status']:<8} "
+            f"{decision.get('failure', ''):<20} missing={decision.get('missing')}"
+        )
+        prose = (decision.get("model_text") or "").strip().replace("\n", " ")
+        if prose:
+            lines.append(f"      model said: {prose[:100]!r}")
+
+    if outcome.get("agent_turns"):
+        lines += ["", "  agent turns:"]
+        for turn in outcome["agent_turns"]:
+            tools = ", ".join(c["tool"] for c in turn.get("tool_calls", [])) or "-"
+            lines.append(
+                f"    {turn['role']:<9} {turn['agent_id']:<18} tools=[{tools}]"
+                f" {turn.get('error') or ''}"
             )
-        return f"vertex-ai project={project} location={location}"
-    if os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"):
-        return "gemini-api-key"
-    raise CredentialsMissingError(
-        "No Google credentials found. Set GOOGLE_API_KEY, or set "
-        "GOOGLE_GENAI_USE_VERTEXAI=TRUE with GOOGLE_CLOUD_PROJECT and "
-        "GOOGLE_CLOUD_LOCATION (see .env.example)."
-    )
 
-
-@contextlib.contextmanager
-def health_endpoint():
-    """Yield the URL the runtime probe should target.
-
-    If PROOFOS_HEALTH_URL is set, probe that service -- point it at Cloud Run to
-    collect evidence from the real deployment. Otherwise start the local demo
-    service so the probe still crosses a real socket.
-    """
-    configured = os.environ.get("PROOFOS_HEALTH_URL")
-    if configured:
-        yield configured, "configured"
-        return
-    with running_health_service() as url:
-        yield url, "local-demo-service"
-
-
-async def run_live_turn(runner: InMemoryRunner, session_id: str, attempt: int) -> Turn:
-    """One live model turn. Records everything the model actually did."""
-    turn = Turn(attempt=attempt)
-    prompt = (
-        f"A worker reports on task {scenario.TASK_ID}: "
-        f'"{scenario.WORKER_CLAIM}" '
-        "Verify this claim and report the outcome."
-    )
-    message = types.Content(role="user", parts=[types.Part(text=prompt)])
-
-    async for event in runner.run_async(
-        user_id=USER_ID, session_id=session_id, new_message=message
-    ):
-        content = getattr(event, "content", None)
-        for part in getattr(content, "parts", None) or []:
-            if getattr(part, "function_call", None):
-                call = part.function_call
-                turn.tool_calls.append(
-                    {"name": call.name, "args": dict(call.args or {})}
-                )
-            if getattr(part, "function_response", None):
-                turn.tool_results.append(dict(part.function_response.response or {}))
-            if getattr(part, "text", None) and not getattr(event, "partial", False):
-                turn.final_text += part.text
-    return turn
-
-
-async def main() -> int:
-    load_env_file()
-    credential_mode = preflight()
-
-    ledger = EvidenceLedger()
-    scenario.seed_incomplete_evidence(ledger)
-    root_agent = build_verifier_agent(ledger)
-
-    runner = InMemoryRunner(agent=root_agent, app_name=APP_NAME)
-    session = await runner.session_service.create_session(
-        app_name=APP_NAME, user_id=USER_ID
-    )
-
-    # Journal lines go to stderr so the report on stdout stays parseable.
-    # On Cloud Run both streams are ingested by Cloud Logging.
-    from proofos.journal import FanoutJournalSink, StreamJournalSink
-
-    backend = build_journal_backend(stream_replica=False)
-    journal = Journal(
-        FanoutJournalSink(backend.durable_sink, StreamJournalSink(sys.stderr)),
-        task_id=scenario.TASK_ID,
-    )
-
-    probes: list[dict] = []
-
-    with health_endpoint() as (health_url, endpoint_kind):
-
-        def collect_runtime():
-            """Recovery step: a real HTTP probe against a real endpoint."""
-            result = scenario.collect_runtime_evidence(
-                ledger, health_url, scenario.health_timeout()
-            )
-            probes.append(
-                {
-                    "url": result.url,
-                    "outcome": result.outcome.value,
-                    "status_code": result.status_code,
-                    "detail": result.detail,
-                    "recorded_as_observed_evidence": result.observed_response,
-                    "satisfies_requirement": result.healthy,
-                }
-            )
-            return result
-
-        outcome = await run_verification_loop(
-            run_turn=functools.partial(run_live_turn, runner, session.id),
-            collectors={"runtime": collect_runtime},
-            max_attempts=MAX_ATTEMPTS,
-            journal=journal,
+    lines += ["", "  evidence:"]
+    for item in outcome.get("evidence", []):
+        lines.append(
+            f"    {item['kind']:<8} {item['source']:<9} by {item['collector']:<20}"
+            f" satisfies={item['satisfies_requirement']}"
         )
 
-    report = {
-        "model": MODEL,
-        "credential_mode": credential_mode,
-        "health_endpoint": {"url": health_url, "kind": endpoint_kind},
-        "task_id": scenario.TASK_ID,
-        "claim": scenario.WORKER_CLAIM,
-        "probes": probes,
-        **outcome,
-        "audit": summarize(journal.events()),
-    }
-    print(json.dumps(report, indent=2))
-    return 0 if outcome["final_status"] == "VERIFIED" else 1
+    lines += [
+        "",
+        f"  audit chain intact: {audit.get('chain_ok')}",
+        f"  execution_id      : {outcome.get('execution_id')}",
+    ]
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    base = os.environ.get(API_URL_ENV, DEFAULT_API_URL).rstrip("/")
+    claim = argv[0] if argv else DEFAULT_CLAIM
+
+    try:
+        config = _get(base, "/config")
+        outcome = _post(base, "/executions", {"claim": claim})
+        audit = _get(base, f"/executions/{outcome['execution_id']}")
+    except ApiUnreachable as exc:
+        print(
+            f"ProofOS API at {base} is not reachable: {exc}\n"
+            "Start it with `docker compose up` or "
+            "`uvicorn proofos_service.app:app --port 8080`.",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(render(config, outcome, audit))
+    if os.environ.get("PROOFOS_DEMO_JSON"):
+        print(json.dumps({"config": config, "outcome": outcome}, indent=2))
+
+    return 0 if outcome.get("final_status") == "VERIFIED" else 1
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(asyncio.run(main()))
-    except CredentialsMissingError as exc:
-        print(f"PREFLIGHT FAILED: {exc}", file=sys.stderr)
-        sys.exit(2)
+    raise SystemExit(main())
