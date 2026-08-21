@@ -38,6 +38,30 @@ are read from a runtime-owned ledger that the model has no write path to. An
 agent that skips the tool entirely cannot produce a success either — the
 orchestrator treats a missing verifier decision as `ABSTAIN`.
 
+## Runtime evidence comes from a real probe
+
+Runtime evidence is not a string in a fixture. It is produced by an actual
+HTTP request in [`proofos/probe.py`](proofos/probe.py), and the recorded
+evidence value is the probe's account of the response it received.
+
+The endpoint must return 2xx with a JSON body containing `{"status": "ok"}`.
+Every other outcome fails closed:
+
+| Probe outcome | Evidence recorded | Verifier |
+| --- | --- | --- |
+| 2xx, `status: "ok"` | `OBSERVED`, valid | `VERIFIED` |
+| 5xx / 4xx | `OBSERVED`, invalid | `ABSTAIN` |
+| 2xx, body not JSON or off-contract | `OBSERVED`, invalid | `ABSTAIN` |
+| 2xx, `status` not `"ok"` | `OBSERVED`, invalid | `ABSTAIN` |
+| Timeout | none — nothing was observed | `ABSTAIN` |
+| Connection failure | none — nothing was observed | `ABSTAIN` |
+
+When no response arrives, no evidence is written at all: a probe that failed to
+reach the service has observed nothing, and silence is never proof.
+
+Set `PROOFOS_HEALTH_URL` to probe a real deployment. Left unset, the demo starts
+a local health service so the probe still crosses a real socket.
+
 ## P0 flow
 
 ```text
@@ -64,16 +88,20 @@ User Goal
 ├── proofos/                 # verification kernel (no model dependency)
 │   ├── __init__.py
 │   ├── verifier.py          # fail-closed verification contract
-│   └── ledger.py            # runtime-owned evidence store (trust boundary)
+│   ├── ledger.py            # runtime-owned evidence store (trust boundary)
+│   └── probe.py             # real HTTP health probe (evidence collector)
 ├── proofos_agent/
 │   ├── __init__.py
 │   ├── agent.py             # Gemini 3.5 Flash / ADK agent + verification tool
 │   ├── scenario.py          # P0 demo scenario and evidence collectors
 │   ├── recovery.py          # bounded ABSTAIN -> collect -> re-verify loop
+│   ├── demo_service.py      # local health endpoint for the probe to hit
 │   └── run_demo.py          # live Gemini + ADK entrypoint
 ├── tests/
 │   ├── test_verifier.py     # contract and threat-model coverage
 │   ├── test_agent_contract.py  # proves the model cannot assert evidence
+│   ├── test_probe.py        # probe against real sockets and real servers
+│   ├── test_runtime_evidence.py  # probe -> ledger -> verifier, fail-closed
 │   └── test_recovery.py     # recovery loop against the real verifier
 ├── docs/
 │   └── architecture.md
@@ -114,8 +142,12 @@ Set:
 ```text
 GOOGLE_GENAI_USE_VERTEXAI=TRUE
 GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
-GOOGLE_CLOUD_LOCATION=us-central1
+GOOGLE_CLOUD_LOCATION=global
 ```
+
+`GOOGLE_CLOUD_LOCATION=global` is the Vertex AI endpoint that serves Gemini
+3.5 Flash. It is **not** a Cloud Run region — Cloud Run still requires a real
+region such as `us-central1` when you deploy.
 
 ## Run locally with ADK
 
@@ -173,6 +205,8 @@ After deployment, preserve the generated `.run.app` URL plus Cloud Run / Vertex 
 - [x] Model cannot assert that evidence exists
 - [x] Verifier failure resolves to ABSTAIN
 - [x] Bounded recovery loop with retry budget
+- [x] Runtime evidence produced by a real HTTP probe
+- [x] Probe timeout / 5xx / malformed / unreachable all fail closed
 - [x] Deterministic verifier tests pass
 - [ ] Live Gemini 3.5 Flash call succeeds
 - [ ] ADK invokes verifier tool in a real session
@@ -193,8 +227,10 @@ After deployment, preserve the generated `.run.app` URL plus Cloud Run / Vertex 
 
 - The evidence ledger is in-memory only. Firestore persistence is not yet built,
   so decisions are not durable across processes.
-- Evidence collectors in `scenario.py` are scripted for the P0 demo rather than
-  wired to live production signals.
+- The runtime collector performs a real HTTP probe, but the demo target is a
+  local health service unless `PROOFOS_HEALTH_URL` points at a deployment.
+- Only one evidence kind is collected live. Test evidence is still a recorded
+  CI result rather than a freshly executed suite.
 - Cloud Run deployment is documented but not yet proven end to end.
 - Observability (Cloud Logging / OpenTelemetry traces) is not yet instrumented.
 

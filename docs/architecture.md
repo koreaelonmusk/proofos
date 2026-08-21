@@ -7,7 +7,8 @@ flowchart TD
     C --> T[verify_task_completion tool<br/>args: task_id, claim only]
     T --> V[Evidence Verifier]
     L[(Evidence Ledger<br/>runtime-owned)] --> V
-    COL[Independent Collectors] -->|OBSERVED evidence| L
+    COL[HTTP Health Probe<br/>real network request] -->|OBSERVED evidence<br/>only if a response arrived| L
+    SVC[Deployed Service /healthz] --> COL
     A -.->|no write path| L
     V -->|all requirements met by trusted evidence| P[VERIFIED]
     V -->|missing / invalid / conflicting / self-reported| B[ABSTAIN]
@@ -34,7 +35,7 @@ Every anomaly resolves to `ABSTAIN`, never to `VERIFIED`:
 | Failure class | Trigger |
 | --- | --- |
 | `EVIDENCE_MISSING` | No evidence of a required kind; no declared requirements |
-| `EVIDENCE_INVALID` | Evidence tampered, empty, or conflicting for one kind |
+| `EVIDENCE_INVALID` | Evidence tampered, empty, conflicting, or a failed probe |
 | `EVIDENCE_UNTRUSTED` | Evidence present but only `EXECUTOR` / `MODEL` sourced |
 | `MALFORMED_INPUT` | Malformed claim, malformed evidence item, unknown task |
 | `VERIFIER_FAILURE` | Unexpected exception inside the verifier |
