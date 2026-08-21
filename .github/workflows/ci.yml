@@ -53,6 +53,28 @@ jobs:
           print('config:', CONFIG.describe())
           assert CONFIG.is_remote, 'the deployable service must default to attested evidence'
           "
+      - name: Agent runtime defaults to deterministic
+        run: |
+          python -c "
+          from proofos_service.config import build_runtime_config, AgentRuntime
+          c = build_runtime_config({'PROOFOS_COLLECTOR_MODE': 'inprocess-test-only'})
+          print('runtime:', c.describe())
+          assert c.agent_runtime is AgentRuntime.DETERMINISTIC
+          assert not c.describe()['live_model_enabled']
+          "
+      - name: Live Gemini mode refuses to start without credentials
+        run: |
+          python -c "
+          from proofos_service.config import build_runtime_config, ConfigurationError
+          try:
+              build_runtime_config({
+                  'PROOFOS_COLLECTOR_MODE': 'inprocess-test-only',
+                  'PROOFOS_AGENT_RUNTIME': 'gemini',
+              })
+          except ConfigurationError as exc:
+              print('refused as expected:', str(exc)[:80]); raise SystemExit(0)
+          raise SystemExit('live mode started without credentials, or fell back silently')
+          "
       - name: Refuse to start unconfigured
         run: |
           python -c "

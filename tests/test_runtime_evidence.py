@@ -129,34 +129,25 @@ if __name__ == "__main__":
 
 
 class DemoEndpointTests(unittest.TestCase):
-    """The demo entrypoint must probe a real endpoint, not a stub."""
+    """The demo health service must answer a real probe."""
 
     def test_local_demo_service_answers_a_real_probe(self):
         from proofos.probe import ProbeOutcome, probe_health
-        from proofos_agent.run_demo import health_endpoint
+        from proofos_agent.demo_service import running_health_service
 
-        import os
-
-        saved = os.environ.pop("PROOFOS_HEALTH_URL", None)
-        try:
-            with health_endpoint() as (url, kind):
-                self.assertEqual(kind, "local-demo-service")
-                result = probe_health(url, timeout=5)
-        finally:
-            if saved is not None:
-                os.environ["PROOFOS_HEALTH_URL"] = saved
+        with running_health_service() as url:
+            result = probe_health(url, timeout=5)
 
         self.assertIs(result.outcome, ProbeOutcome.HEALTHY)
 
-    def test_configured_url_overrides_the_demo_service(self):
+    def test_a_configured_health_url_overrides_the_default(self):
         import os
 
-        from proofos_agent.run_demo import health_endpoint
+        from proofos_agent import scenario
 
         os.environ["PROOFOS_HEALTH_URL"] = "https://example.invalid/healthz"
         try:
-            with health_endpoint() as (url, kind):
-                self.assertEqual(url, "https://example.invalid/healthz")
-                self.assertEqual(kind, "configured")
+            self.assertEqual(scenario.health_url(), "https://example.invalid/healthz")
         finally:
             os.environ.pop("PROOFOS_HEALTH_URL", None)
+        self.assertEqual(scenario.health_url(), scenario.DEFAULT_HEALTH_URL)

@@ -105,7 +105,7 @@ class RecoveryLoopTests(unittest.TestCase):
 class PreflightTests(unittest.TestCase):
     def test_preflight_refuses_to_run_without_credentials(self):
         import os
-        from proofos_agent.run_demo import CredentialsMissingError, preflight
+        from proofos_agent.gemini_runner import CredentialsMissingError, preflight
 
         saved = {
             key: os.environ.pop(key, None)
