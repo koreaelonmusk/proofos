@@ -519,13 +519,14 @@ class AgentRuntimeSelectionTests(unittest.TestCase):
     def test_preflight_never_returns_the_secret(self):
         from proofos_agent.gemini_runner import preflight
 
-        os.environ["GOOGLE_API_KEY"] = "AIza-not-a-real-key-0123456789"
+        os.environ["GOOGLE_API_KEY"] = "placeholder-not-a-real-credential"
         try:
             mode = preflight()
         finally:
             os.environ.pop("GOOGLE_API_KEY", None)
+        # The mode names which variable was used, never its value.
         self.assertEqual(mode, "gemini-api-key")
-        self.assertNotIn("AIza", mode)
+        self.assertNotIn("placeholder", mode)
 
 
 if __name__ == "__main__":
