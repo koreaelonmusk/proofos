@@ -11,6 +11,7 @@ reconstructed afterwards without trusting the agent's account of it.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping
 
@@ -162,7 +163,12 @@ async def run_verification_loop(
             missing=missing,
         )
         for kind in missing:
+            # Collectors may be async so that blocking I/O can be offloaded off
+            # the event loop. A collector that blocks the loop would stall the
+            # whole worker, including any endpoint it is trying to observe.
             result = collectors[kind]()
+            if inspect.isawaitable(result):
+                result = await result
             detail = _collector_detail(result)
             collected = detail.get("recorded")
             note(
