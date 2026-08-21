@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from .verifier import Evidence
 
 
+class EvidenceTamperedError(ValueError):
+    """Raised when a stored record no longer matches its own content hash."""
+
+
 class UnknownTaskError(KeyError):
     """Raised when a caller references a task the runtime never opened."""
 
@@ -38,7 +42,19 @@ class EvidenceLedger:
         return self._require(task_id).required_kinds
 
     def evidence(self, task_id: str) -> tuple[Evidence, ...]:
-        return tuple(self._require(task_id).evidence)
+        """Return the task's evidence, refusing records that were mutated.
+
+        In process this cannot fire, because Evidence is frozen. It exists so
+        the same contract holds once records come back from a durable store.
+        """
+        items = tuple(self._require(task_id).evidence)
+        for item in items:
+            if not item.intact:
+                raise EvidenceTamperedError(
+                    f"evidence record for task {task_id!r} kind {item.kind!r} "
+                    "does not match its content hash"
+                )
+        return items
 
     def knows(self, task_id: str) -> bool:
         return task_id in self._tasks
