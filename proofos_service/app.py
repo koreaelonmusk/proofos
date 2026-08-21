@@ -34,12 +34,12 @@ from proofos.journal import JournalUnavailableError, summarize
 from proofos.journal_backend import build_journal_backend
 from proofos.registry import default_registry
 from proofos_agent import scenario
-from proofos_agent.attested_scenario import run_attested_scenario
+from proofos_agent.attested_scenario import run_attested_agent_scenario
 from proofos_agent.collector_client import build_collector_client
 from proofos_agent.fleet_scenario import run_scenario
 from proofos_agent.orchestration import MAX_ATTEMPTS
 
-from .config import CollectorMode, RuntimeConfig, build_runtime_config
+from .config import AgentRuntime, CollectorMode, RuntimeConfig, build_runtime_config
 
 SERVICE_NAME = "proofos"
 
@@ -142,7 +142,7 @@ async def _run_remote_execution(request: ExecutionRequest) -> dict[str, Any]:
         CONFIG.collector_url, CONFIG.client_timeout, CONFIG.auth
     )
 
-    outcome, _journal, ledger = await run_attested_scenario(
+    outcome, _journal, ledger = await run_attested_agent_scenario(
         sink=JOURNAL.append_sink,
         collector_public_key_b64=CONFIG.public_key_b64,
         client=client,
@@ -150,6 +150,7 @@ async def _run_remote_execution(request: ExecutionRequest) -> dict[str, Any]:
         claim_text=request.claim,
         max_attempts=request.max_attempts,
         probe_runner=_offload,
+        agent_runtime=str(CONFIG.agent_runtime),
         collector_id=CONFIG.collector_id,
         profile_id=CONFIG.profile_id,
     )

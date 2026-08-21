@@ -29,6 +29,7 @@ COLLECTOR_ID_ENV = "PROOFOS_COLLECTOR_ID"
 PROFILE_ENV = "PROOFOS_COLLECTOR_PROFILE"
 TIMEOUT_ENV = "PROOFOS_COLLECTOR_CLIENT_TIMEOUT"
 AUTH_ENV = "PROOFOS_COLLECTOR_AUTH"
+AGENT_RUNTIME_ENV = "PROOFOS_AGENT_RUNTIME"
 
 
 class CollectorMode(StrEnum):
@@ -40,6 +41,17 @@ class CollectorMode(StrEnum):
     #: in-process grant. Retained for deterministic unit tests of the
     #: orchestration itself; it is not a deployment mode, and its name says so.
     INPROCESS_TEST_ONLY = "inprocess-test-only"
+
+
+class AgentRuntime(StrEnum):
+    #: Roles are played by deterministic Python. The default, because CI must
+    #: not depend on an external model, and because a run that never called a
+    #: model should never be described as one that did.
+    DETERMINISTIC = "deterministic"
+
+    #: Roles are played by live Gemini agents through Google ADK. Requested by
+    #: name only -- never inferred from the presence of credentials.
+    GEMINI = "gemini"
 
 
 class ConfigurationError(RuntimeError):
@@ -55,6 +67,7 @@ class RuntimeConfig:
     public_key_b64: str = ""
     client_timeout: float = 15.0
     auth: str = AUTH_AUTO
+    agent_runtime: AgentRuntime = AgentRuntime.DETERMINISTIC
 
     @property
     def is_remote(self) -> bool:
@@ -68,6 +81,8 @@ class RuntimeConfig:
             "profile_id": self.profile_id,
             "attested_evidence": self.is_remote,
             "collector_auth": self.auth,
+            "agent_runtime": str(self.agent_runtime),
+            "live_model_enabled": self.agent_runtime is AgentRuntime.GEMINI,
         }
 
 
@@ -92,9 +107,33 @@ def build_runtime_config(env: dict[str, str] | None = None) -> RuntimeConfig:
     collector_id = source.get(COLLECTOR_ID_ENV, COLLECTOR_ID)
     profile_id = source.get(PROFILE_ENV, RUNTIME_HEALTH_PROFILE)
 
+    raw_runtime = source.get(
+        AGENT_RUNTIME_ENV, AgentRuntime.DETERMINISTIC.value
+    ).strip().lower()
+    try:
+        agent_runtime = AgentRuntime(raw_runtime)
+    except ValueError as exc:
+        raise ConfigurationError(
+            f"unknown {AGENT_RUNTIME_ENV}={raw_runtime!r}; "
+            f"allowed: {[r.value for r in AgentRuntime]}"
+        ) from exc
+
+    if agent_runtime is AgentRuntime.GEMINI:
+        # Fail here, not at the first request. A service advertising a live
+        # model must not start without one.
+        from proofos_agent.gemini_runner import CredentialsMissingError, preflight
+
+        try:
+            preflight()
+        except CredentialsMissingError as exc:
+            raise ConfigurationError(str(exc)) from exc
+
     if mode is CollectorMode.INPROCESS_TEST_ONLY:
         return RuntimeConfig(
-            mode=mode, collector_id=collector_id, profile_id=profile_id
+            mode=mode,
+            collector_id=collector_id,
+            profile_id=profile_id,
+            agent_runtime=agent_runtime,
         )
 
     url = source.get(URL_ENV, "").strip()
@@ -130,4 +169,5 @@ def build_runtime_config(env: dict[str, str] | None = None) -> RuntimeConfig:
         public_key_b64=public_key,
         client_timeout=timeout,
         auth=auth,
+        agent_runtime=agent_runtime,
     )
