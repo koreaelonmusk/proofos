@@ -1,0 +1,181 @@
+{
+  "note": "Sanitized record of a real Gemini execution through the deployable ProofOS API. Contains no credentials, tokens, or key material.",
+  "commit_sha": "f5a62aca6c21799705c6d6e534d020f22006c71e",
+  "timestamp_utc": "2026-08-22T01:34:28Z",
+  "model": "gemini-3.5-flash",
+  "credential_mode": "gemini-api-key",
+  "agent_runtime": "gemini",
+  "live_model_enabled": true,
+  "collector_mode": "remote",
+  "attested_evidence": true,
+  "execution_id": "exec_3c3206aa795248dd",
+  "trace_id": "bc9929968f26417da2c175c814704860",
+  "task_id": "BUG-4417",
+  "claim": "Production bug BUG-4417 is fixed and the service is healthy.",
+  "agent_turns": [
+    {
+      "role": "planner",
+      "agent_id": "planner-v1",
+      "attempt": 0,
+      "model": "gemini-3.5-flash",
+      "duration_ms": 5637,
+      "error": null,
+      "tool_calls": []
+    },
+    {
+      "role": "executor",
+      "agent_id": "executor-v1",
+      "attempt": 0,
+      "model": "gemini-3.5-flash",
+      "duration_ms": 17083,
+      "error": null,
+      "tool_calls": [
+        {
+          "tool": "perform_action",
+          "args": {},
+          "responded": null,
+          "status": null
+        },
+        {
+          "tool": "perform_action",
+          "args": {},
+          "responded": null,
+          "status": null
+        },
+        {
+          "tool": "perform_action",
+          "args": {},
+          "responded": null,
+          "status": null
+        },
+        {
+          "tool": "perform_action",
+          "args": {},
+          "responded": null,
+          "status": null
+        }
+      ]
+    },
+    {
+      "role": "verifier",
+      "agent_id": "verifier-v1",
+      "attempt": 1,
+      "model": "gemini-3.5-flash",
+      "duration_ms": 35355,
+      "error": null,
+      "tool_calls": [
+        {
+          "tool": "verify_task_completion",
+          "args": {
+            "claim": "Production bug BUG-4417 is fixed and the service is healthy.",
+            "task_id": "BUG-4417"
+          },
+          "responded": null,
+          "status": "ABSTAIN"
+        }
+      ]
+    },
+    {
+      "role": "verifier",
+      "agent_id": "verifier-v1",
+      "attempt": 2,
+      "model": "gemini-3.5-flash",
+      "duration_ms": 2508,
+      "error": null,
+      "tool_calls": [
+        {
+          "tool": "verify_task_completion",
+          "args": {
+            "task_id": "BUG-4417",
+            "claim": "Production bug BUG-4417 is fixed and the service is healthy."
+          },
+          "responded": null,
+          "status": "VERIFIED"
+        }
+      ]
+    }
+  ],
+  "verifier_decisions": [
+    {
+      "attempt": 1,
+      "status": "ABSTAIN",
+      "failure": "EVIDENCE_UNTRUSTED",
+      "missing": [
+        "runtime"
+      ]
+    },
+    {
+      "attempt": 2,
+      "status": "VERIFIED",
+      "failure": "NONE",
+      "missing": []
+    }
+  ],
+  "attestation_accepted": true,
+  "attestation_event_digest_sha256": "abfc28fa000e75d75170f1089523d1dea802252bea0e6fff8e6d18119f10cb02",
+  "evidence": [
+    {
+      "kind": "tests",
+      "source": "OBSERVED",
+      "collector": "collector-ci-v1",
+      "satisfies_requirement": true
+    },
+    {
+      "kind": "runtime",
+      "source": "EXECUTOR",
+      "collector": "executor-v1",
+      "satisfies_requirement": true
+    },
+    {
+      "kind": "runtime",
+      "source": "OBSERVED",
+      "collector": "collector-http-v1",
+      "satisfies_requirement": true
+    }
+  ],
+  "final_status": "VERIFIED",
+  "audit_chain_ok": true,
+  "audit_chain_problems": [],
+  "journal_event_sequence": [
+    "EXECUTION_START",
+    "AGENT_TURN",
+    "AGENT_TURN_STARTED",
+    "AGENT_TURN_COMPLETED",
+    "EVIDENCE_COLLECTED",
+    "AGENT_TURN",
+    "AGENT_TURN",
+    "AGENT_TURN",
+    "AGENT_TURN",
+    "AGENT_TURN_STARTED",
+    "AGENT_TOOL_CALLED",
+    "AGENT_TOOL_RESULT",
+    "AGENT_TOOL_CALLED",
+    "AGENT_TOOL_RESULT",
+    "AGENT_TOOL_CALLED",
+    "AGENT_TOOL_RESULT",
+    "AGENT_TOOL_CALLED",
+    "AGENT_TOOL_RESULT",
+    "AGENT_TURN_COMPLETED",
+    "CLAIM_RECEIVED",
+    "AGENT_TURN_STARTED",
+    "AGENT_TOOL_CALLED",
+    "AGENT_TOOL_RESULT",
+    "AGENT_TURN_COMPLETED",
+    "VERIFIER_DECISION",
+    "RECOVERY_START",
+    "COLLECTION_REQUESTED",
+    "COLLECTOR_RESPONSE_RECEIVED",
+    "ATTESTATION_ACCEPTED",
+    "EVIDENCE_COLLECTED",
+    "AGENT_TURN_STARTED",
+    "AGENT_TOOL_CALLED",
+    "AGENT_TOOL_RESULT",
+    "AGENT_TURN_COMPLETED",
+    "VERIFIER_DECISION",
+    "EXECUTION_COMPLETE"
+  ],
+  "adversarial_case": {
+    "status": "NOT PROVEN",
+    "reason": "Gemini free-tier GenerateRequestsPerDayPerProjectPerModel quota (20 requests/day) was exhausted before the adversarial claim could be judged by a responding model."
+  }
+}
