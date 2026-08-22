@@ -639,3 +639,47 @@ class CollectorIdentityPersistenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CollectorKeyBootstrapTests(unittest.TestCase):
+    """A configured key path must not be answered by inventing a key."""
+
+    def test_a_missing_key_file_is_refused_by_default(self):
+        from proofos.keys import FileSigningKeyProvider, KeyMaterialError
+
+        missing = os.path.join(tempfile.mkdtemp(), "absent.pem")
+        with self.assertRaises(KeyMaterialError):
+            FileSigningKeyProvider(missing, create_if_missing=False).load_private_key()
+
+    def test_the_collector_refuses_to_start_when_its_mounted_key_is_absent(self):
+        """A failed secret mount is a deployment fault, not a new identity.
+
+        create_key=False models Cloud Run mounting the signing key from Secret
+        Manager: if the mount is missing, the process must fail loudly rather
+        than quietly signing with an identity nobody configured.
+        """
+        collector = CollectorProcess(
+            "http://127.0.0.1:1/healthz",
+            private_key_file=os.path.join(tempfile.mkdtemp(), "never-written.pem"),
+            create_key=False,
+        )
+        try:
+            with self.assertRaises(RuntimeError):
+                collector.start(timeout=45)
+        finally:
+            collector.stop()
+
+    def test_a_provisioned_key_still_starts_normally(self):
+        # The guard must refuse only a *missing* key, not a present one.
+        directory = tempfile.mkdtemp()
+        key_path = os.path.join(directory, "collector.pem")
+        FileSigningKeyProvider(key_path, create_if_missing=True).load_private_key()
+
+        with running_health_service() as target:
+            collector = CollectorProcess(
+                target, private_key_file=key_path, create_key=False
+            ).start()
+            try:
+                self.assertTrue(collector.public_key_b64)
+            finally:
+                collector.stop()

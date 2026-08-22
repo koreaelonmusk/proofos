@@ -44,6 +44,10 @@ TARGET_ENV = "PROOFOS_COLLECTOR_TARGET"
 # A path, never the key itself. Key material in an environment variable ends up
 # in process listings, crash dumps, and container inspect output.
 PRIVATE_KEY_FILE_ENV = "PROOFOS_COLLECTOR_PRIVATE_KEY_FILE"
+# Bootstrapping a key must be asked for. A mounted secret that fails to
+# appear would otherwise be answered by minting a fresh identity, which
+# silently invalidates every attestation issued under the real one.
+CREATE_KEY_ENV = "PROOFOS_COLLECTOR_CREATE_KEY"
 PUBLIC_KEY_FILE_ENV = "PROOFOS_COLLECTOR_PUBKEY_FILE"
 TIMEOUT_ENV = "PROOFOS_COLLECTOR_TIMEOUT"
 
@@ -80,7 +84,11 @@ def _load_signer() -> AttestationSigner:
     collector_id = os.environ.get(COLLECTOR_ID_ENV, DEFAULT_COLLECTOR_ID)
     key_file = os.environ.get(PRIVATE_KEY_FILE_ENV)
     if key_file:
-        provider = FileSigningKeyProvider(key_file, create_if_missing=True)
+        # Default: a configured path must already hold a key. On Cloud Run the
+        # key arrives as a mounted secret, and a missing mount is a deployment
+        # fault to surface, not one to paper over with a new identity.
+        create = os.environ.get(CREATE_KEY_ENV, "").strip().lower() in {"1", "true", "yes"}
+        provider = FileSigningKeyProvider(key_file, create_if_missing=create)
         return AttestationSigner(provider.load_private_key(), collector_id)
     return AttestationSigner.generate(collector_id)
 

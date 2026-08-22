@@ -71,6 +71,17 @@ proposes `asia-northeast3` (Seoul).
 | Collector service privacy | NOT PROVEN |
 | Cloud Logging ingestion | NOT PROVEN |
 
+## Collector signing key on Cloud Run
+
+The key arrives as a Secret Manager volume mount. `PROOFOS_COLLECTOR_CREATE_KEY`
+is deliberately **not** set in cloud: a configured key path that turns out to be
+empty is a failed mount, and answering that by minting a fresh identity would
+silently invalidate every attestation issued under the real one. The collector
+refuses to start instead.
+
+The flag exists only so a local harness can bootstrap a throwaway identity, and
+it has to be asked for by name.
+
 ## Known limitation: DNS rebinding
 
 A collection profile naming a hostname resolves it at request time. A hostile

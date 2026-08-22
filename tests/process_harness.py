@@ -37,9 +37,11 @@ class CollectorProcess:
         collector_id: str = "collector-http-v1",
         private_key_file: str | None = None,
         port: int | None = None,
+        create_key: bool = True,
     ):
         self.port = port or free_port()
         self.private_key_file = private_key_file
+        self.create_key = create_key
         self.base_url = f"http://127.0.0.1:{self.port}"
         self.target_url = target_url
         self.collector_id = collector_id
@@ -72,6 +74,11 @@ class CollectorProcess:
             # A durable identity: the same key file across restarts means the
             # same collector, which is what a service artifact needs.
             env["PROOFOS_COLLECTOR_PRIVATE_KEY_FILE"] = self.private_key_file
+            # The harness bootstraps its own throwaway identity, so it asks for
+            # creation explicitly rather than relying on a permissive default.
+            # Setting create_key=False models a Cloud Run secret mount, where a
+            # missing key must be a startup failure.
+            env["PROOFOS_COLLECTOR_CREATE_KEY"] = "true" if self.create_key else "false"
         else:
             env.pop("PROOFOS_COLLECTOR_PRIVATE_KEY_FILE", None)
 
