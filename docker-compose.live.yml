@@ -18,6 +18,11 @@ services:
     environment:
       PROOFOS_AGENT_RUNTIME: gemini
 
+      # Free-tier Gemini caps requests per minute. Spacing turns keeps a run
+      # under the cap; raise it if your key is more constrained, or set 0 on a
+      # paid key. It changes pacing only -- never a decision.
+      PROOFOS_GEMINI_TURN_DELAY_SECONDS: ${PROOFOS_GEMINI_TURN_DELAY_SECONDS:-20}
+
       # Gemini Developer API: set one of these.
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}

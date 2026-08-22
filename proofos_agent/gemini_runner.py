@@ -16,7 +16,9 @@ verdict is decided by ``decision_from``, from the tool result alone.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import re
 import time
 from typing import Any, Callable
 
@@ -35,6 +37,33 @@ from .turn_runner import ACTION_TOOL, VERIFY_TOOL, AgentTurn, ToolInvocation
 
 APP_NAME = "proofos"
 USER_ID = "proofos-runtime"
+
+#: Free-tier Gemini allows a handful of requests per minute per model, and a
+#: full ProofOS execution needs roughly a dozen. A rate limit is a transport
+#: condition, not a verdict, so it is waited out rather than treated as a
+#: failed turn -- but only a bounded number of times, because an execution that
+#: cannot finish must still end.
+#: Free tiers cap requests per minute, and retrying after a rejection still
+#: spends attempts. Spacing turns proactively keeps a run under the cap instead
+#: of discovering the cap and then fighting it.
+TURN_DELAY_ENV = "PROOFOS_GEMINI_TURN_DELAY_SECONDS"
+
+RATE_LIMIT_RETRIES = 4
+RATE_LIMIT_BACKOFF_SECONDS = 20.0
+MAX_BACKOFF_SECONDS = 75.0
+
+
+def _is_rate_limit(exc: Exception) -> bool:
+    name = type(exc).__name__
+    return "ResourceExhausted" in name or "429" in str(exc)[:64]
+
+
+def _retry_delay(exc: Exception, attempt: int) -> float:
+    """Honour the server's RetryInfo when it offers one."""
+    match = re.search(r"retryDelay['\"]?:\s*['\"]?(\d+(?:\.\d+)?)s", str(exc))
+    if match:
+        return min(float(match.group(1)) + 1.0, MAX_BACKOFF_SECONDS)
+    return min(RATE_LIMIT_BACKOFF_SECONDS * attempt, MAX_BACKOFF_SECONDS)
 
 
 class CredentialsMissingError(RuntimeError):
@@ -144,7 +173,16 @@ class GeminiAdkTurnRunner:
             self._sessions[role] = session.id
         return self._runners[role], self._sessions[role]
 
+    async def _pace(self) -> None:
+        try:
+            delay = float(os.environ.get(TURN_DELAY_ENV, "0"))
+        except ValueError:
+            delay = 0.0
+        if delay > 0:
+            await asyncio.sleep(delay)
+
     async def _run(self, role: str, agent, agent_id: str, prompt: str, attempt: int = 0) -> AgentTurn:
+        await self._pace()
         started = time.time()
         calls: list[ToolInvocation] = []
         pending: list[dict[str, Any]] = []
@@ -152,37 +190,45 @@ class GeminiAdkTurnRunner:
         error = ""
         session_id = ""
 
-        try:
-            runner, session_id = await self._session_for(role, agent)
-            message = types.Content(role="user", parts=[types.Part(text=prompt)])
+        for rate_attempt in range(1, RATE_LIMIT_RETRIES + 2):
+            calls, pending, final_text, error = [], [], "", ""
+            try:
+                runner, session_id = await self._session_for(role, agent)
+                message = types.Content(role="user", parts=[types.Part(text=prompt)])
 
-            async for event in runner.run_async(
-                user_id=USER_ID, session_id=session_id, new_message=message
-            ):
-                content = getattr(event, "content", None)
-                for part in getattr(content, "parts", None) or []:
-                    call = getattr(part, "function_call", None)
-                    if call is not None:
-                        pending.append(
-                            {"name": call.name, "args": dict(call.args or {})}
-                        )
-                    response = getattr(part, "function_response", None)
-                    if response is not None:
-                        matched = _match(pending, response.name)
-                        calls.append(
-                            ToolInvocation(
-                                name=response.name or (matched or {}).get("name", ""),
-                                args=(matched or {}).get("args", {}),
-                                result=_as_dict(response.response),
+                async for event in runner.run_async(
+                    user_id=USER_ID, session_id=session_id, new_message=message
+                ):
+                    content = getattr(event, "content", None)
+                    for part in getattr(content, "parts", None) or []:
+                        call = getattr(part, "function_call", None)
+                        if call is not None:
+                            pending.append(
+                                {"name": call.name, "args": dict(call.args or {})}
                             )
-                        )
-                    text = getattr(part, "text", None)
-                    if text and not getattr(event, "partial", False):
-                        final_text += text
-        except Exception as exc:  # noqa: BLE001 - a model failure is a turn failure
-            # The exception type only. Provider messages can carry request
-            # echoes, and this string is journaled.
-            error = f"{type(exc).__name__}"
+                        response = getattr(part, "function_response", None)
+                        if response is not None:
+                            matched = _match(pending, response.name)
+                            calls.append(
+                                ToolInvocation(
+                                    name=response.name
+                                    or (matched or {}).get("name", ""),
+                                    args=(matched or {}).get("args", {}),
+                                    result=_as_dict(response.response),
+                                )
+                            )
+                        text = getattr(part, "text", None)
+                        if text and not getattr(event, "partial", False):
+                            final_text += text
+                break
+            except Exception as exc:  # noqa: BLE001 - a model failure is a turn failure
+                # The exception type only. Provider messages can carry request
+                # echoes, and this string is journaled.
+                error = f"{type(exc).__name__}"
+                if _is_rate_limit(exc) and rate_attempt <= RATE_LIMIT_RETRIES:
+                    await asyncio.sleep(_retry_delay(exc, rate_attempt))
+                    continue
+                break
 
         # A call the model made that never produced a response is recorded as
         # unanswered rather than dropped, so a partial stream is visible.
