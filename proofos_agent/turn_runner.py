@@ -35,11 +35,27 @@ class ToolInvocation:
     args: dict[str, Any] = field(default_factory=dict)
     result: dict[str, Any] | None = None
 
+    #: Argument names safe to carry into a journal. An allowlist rather than a
+    #: denylist, so a tool gaining a sensitive parameter later does not start
+    #: leaking it by default.
+    SAFE_ARGS = frozenset({"task_id", "claim", "instruction"})
+
+    @property
+    def responded(self) -> bool:
+        """Whether a result came back at all.
+
+        Distinct from a result that simply carries no ``status``: only the
+        verification tool reports one, so "no status" and "no response" must not
+        look alike in a transcript.
+        """
+        return self.result is not None
+
     def summary(self) -> dict[str, Any]:
         """Safe for journaling: names and arguments, never key material."""
         return {
             "tool": self.name,
-            "args": {k: v for k, v in self.args.items() if k in {"task_id", "claim"}},
+            "args": {k: v for k, v in self.args.items() if k in self.SAFE_ARGS},
+            "responded": self.responded,
             "status": (self.result or {}).get("status"),
         }
 

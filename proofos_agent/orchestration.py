@@ -232,10 +232,16 @@ async def run_agent_execution(
                 tool=call.name,
                 attempt=turn.attempt,
             )
+            # A tool that answered without a status is not the same as one
+            # that never answered, and the trail should not blur them.
+            if not call.responded:
+                tool_status = "NO_RESPONSE"
+            else:
+                tool_status = call.result.get("status") or "OK"
             note(
                 EventType.AGENT_TOOL_RESULT,
-                (call.result or {}).get("status", "NO_RESULT"),
-                Severity.INFO if call.result else Severity.WARNING,
+                tool_status,
+                Severity.INFO if call.responded else Severity.WARNING,
                 agent_id=turn.agent_id,
                 tool=call.name,
                 attempt=turn.attempt,

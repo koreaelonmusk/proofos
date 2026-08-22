@@ -531,3 +531,31 @@ class AgentRuntimeSelectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ToolTranscriptFidelityTests(unittest.TestCase):
+    """A transcript must not blur "answered oddly" with "never answered"."""
+
+    def test_a_result_without_a_status_is_still_a_response(self):
+        # perform_action returns a description, not a status. That is not the
+        # same as a tool call that never came back.
+        call = ToolInvocation(ACTION_TOOL, {"instruction": "fix it"}, {"result": "done"})
+        self.assertTrue(call.responded)
+        summary = call.summary()
+        self.assertTrue(summary["responded"])
+        self.assertIsNone(summary["status"])
+
+    def test_an_unanswered_call_is_marked_as_such(self):
+        call = ToolInvocation(ACTION_TOOL, {"instruction": "fix it"}, None)
+        self.assertFalse(call.responded)
+        self.assertFalse(call.summary()["responded"])
+
+    def test_the_action_instruction_survives_into_the_transcript(self):
+        call = ToolInvocation(ACTION_TOOL, {"instruction": "patch BUG-4417"}, {"result": "ok"})
+        self.assertEqual(call.summary()["args"]["instruction"], "patch BUG-4417")
+
+    def test_unlisted_arguments_are_dropped_from_the_transcript(self):
+        call = ToolInvocation(
+            ACTION_TOOL, {"instruction": "x", "api_key": "should-not-appear"}, {"result": "ok"}
+        )
+        self.assertNotIn("api_key", call.summary()["args"])
