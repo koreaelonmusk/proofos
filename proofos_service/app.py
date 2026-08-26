@@ -87,6 +87,17 @@ def healthz() -> dict[str, Any]:
     return {"status": "ok", "service": SERVICE_NAME}
 
 
+@app.get("/health")
+def health() -> dict[str, Any]:
+    """Health in the probe's contract shape, on a path Cloud Run leaves alone.
+
+    ``/healthz`` is intercepted by Google's front end and never reaches the
+    container, so an external observer -- including the collector -- cannot use
+    it. This path is the one a cross-service probe actually reaches.
+    """
+    return {"status": "ok", "service": SERVICE_NAME}
+
+
 @app.get("/config")
 def config() -> dict[str, Any]:
     """How this instance obtains runtime evidence. Carries no key material."""

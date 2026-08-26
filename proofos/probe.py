@@ -95,6 +95,7 @@ def probe_health(
     max_bytes: int = MAX_BODY_BYTES,
     expected_status_field: str = "status",
     expected_status_value: str = "ok",
+    auth_token: str | None = None,
 ) -> ProbeResult:
     """GET ``url`` and report the observed health of the service.
 
@@ -102,6 +103,11 @@ def probe_health(
     Anything else is not healthy.
     """
     request = urllib.request.Request(url, method="GET")
+    if auth_token:
+        # Present the collector's own identity. The token is attached here and
+        # never stored on the result, logged, or carried into an attestation --
+        # a credential in an audit record is a credential that leaks.
+        request.add_header("Authorization", f"Bearer {auth_token}")
     try:
         with _OPENER.open(request, timeout=timeout) as response:
             status = getattr(response, "status", None)

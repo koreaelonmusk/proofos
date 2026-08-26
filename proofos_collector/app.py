@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,6 +51,9 @@ PRIVATE_KEY_FILE_ENV = "PROOFOS_COLLECTOR_PRIVATE_KEY_FILE"
 CREATE_KEY_ENV = "PROOFOS_COLLECTOR_CREATE_KEY"
 PUBLIC_KEY_FILE_ENV = "PROOFOS_COLLECTOR_PUBKEY_FILE"
 TIMEOUT_ENV = "PROOFOS_COLLECTOR_TIMEOUT"
+# Whether the observation target refuses anonymous requests. When set, the
+# collector presents its own Cloud Run service identity.
+TARGET_REQUIRES_AUTH_ENV = "PROOFOS_COLLECTOR_TARGET_REQUIRES_AUTH"
 
 DEFAULT_COLLECTOR_ID = "collector-http-v1"
 DEFAULT_TARGET = "http://127.0.0.1:8081/healthz"
@@ -108,7 +112,33 @@ def _publish_public_key(signer: AttestationSigner) -> None:
 def _load_profiles(collector_id: str) -> ProfileRegistry:
     timeout = float(os.environ.get(TIMEOUT_ENV, "5"))
     target = os.environ.get(TARGET_ENV, DEFAULT_TARGET)
-    return default_profiles(target, collector_id, timeout)
+    requires_auth = os.environ.get(TARGET_REQUIRES_AUTH_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    return default_profiles(target, collector_id, timeout, requires_auth)
+
+
+def _identity_token_for(target: str) -> str:
+    """A Google-signed ID token for the target, from this service's identity.
+
+    The collector authenticates as itself. It never receives, stores, or reuses
+    the caller's credential -- an observer borrowing the credential of the party
+    it observes would defeat the separation this service exists to provide.
+
+    A failure here raises rather than falling back to an anonymous request: a
+    silent downgrade would turn a permission problem into an UNHEALTHY reading
+    and point the investigation at the wrong service.
+    """
+    import google.auth.transport.requests
+    import google.oauth2.id_token
+
+    parts = urlsplit(target)
+    audience = f"{parts.scheme}://{parts.netloc}"
+    return google.oauth2.id_token.fetch_id_token(
+        google.auth.transport.requests.Request(), audience
+    )
 
 
 SIGNER = _load_signer()
@@ -148,6 +178,19 @@ async def collect(request: CollectRequest) -> dict[str, Any]:
     except ProfileScopeViolation as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
+    token = None
+    if profile.requires_auth:
+        try:
+            token = await run_in_threadpool(_identity_token_for, profile.target)
+        except Exception as exc:  # noqa: BLE001 - surfaced, never downgraded
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "collector could not obtain its own identity token: "
+                    f"{type(exc).__name__}"
+                ),
+            ) from exc
+
     # The probe blocks on a socket; keep it off the event loop so this service
     # can still answer while a collection is in flight.
     result = await run_in_threadpool(
@@ -157,6 +200,7 @@ async def collect(request: CollectRequest) -> dict[str, Any]:
         profile.max_response_bytes,
         profile.expected_status_field,
         profile.expected_status_value,
+        token,
     )
 
     attestation = SIGNER.sign(

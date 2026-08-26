@@ -62,6 +62,9 @@ class CollectionProfile:
     expected_content_type: str = "application/json"
     expected_status_field: str = "status"
     expected_status_value: str = "ok"
+    #: Whether the target refuses anonymous requests. When true the collector
+    #: presents its own service identity; it never borrows the caller's.
+    requires_auth: bool = False
 
     def __post_init__(self) -> None:
         parts = urlsplit(self.target)
@@ -144,7 +147,10 @@ RUNTIME_HEALTH_PROFILE = "runtime-health-v1"
 
 
 def default_profiles(
-    target: str, collector_id: str, timeout: float = DEFAULT_TIMEOUT_SECONDS
+    target: str,
+    collector_id: str,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    requires_auth: bool = False,
 ) -> ProfileRegistry:
     """The profiles this collector serves, sealed."""
     registry = ProfileRegistry()
@@ -155,6 +161,7 @@ def default_profiles(
             allowed_kind="runtime",
             target=target,
             timeout=timeout,
+            requires_auth=requires_auth,
         )
     )
     return registry.seal()
