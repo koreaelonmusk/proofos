@@ -1,0 +1,123 @@
+{
+  "note": "Sanitized record of a live Gemini execution on Google Cloud Run. Contains no credentials, tokens, or key material.",
+  "commit_sha": "77c2dfa1f60d6d7eeace64d4dc40d6693dd2f1c6",
+  "timestamp_utc": "2026-08-26T07:53:13Z",
+  "project_id": "proofos-agentic-260822-7782",
+  "region": "asia-northeast3",
+  "api_service_url": "https://proofos-api-887916695462.asia-northeast3.run.app",
+  "collector_service": "proofos-collector (private, no allUsers binding)",
+  "cloud_run_revisions": {
+    "api": "proofos-api-00003-djr",
+    "collector": "proofos-collector-00003-hxp"
+  },
+  "service_accounts": {
+    "api": "proofos-api-sa",
+    "collector": "proofos-collector-sa"
+  },
+  "model": "gemini-3.5-flash",
+  "credential_mode": "gemini-api-key (Secret Manager)",
+  "agent_runtime": "gemini",
+  "execution_id": "exec_8a09be3ac5a44810",
+  "agent_turns": [
+    {
+      "duration_ms": 12138,
+      "tools": [],
+      "role": "planner"
+    },
+    {
+      "calls": 7,
+      "note": "ended with ServerError after 7 tool calls",
+      "tools": [
+        "perform_action"
+      ],
+      "duration_ms": 51694,
+      "role": "executor"
+    },
+    {
+      "duration_ms": 4894,
+      "attempt": 1,
+      "tools": [
+        "verify_task_completion"
+      ],
+      "role": "verifier"
+    },
+    {
+      "duration_ms": 3384,
+      "attempt": 2,
+      "tools": [
+        "verify_task_completion"
+      ],
+      "role": "verifier"
+    }
+  ],
+  "verifier_decisions": [
+    {
+      "failure": "EVIDENCE_UNTRUSTED",
+      "attempt": 1,
+      "missing": [
+        "runtime"
+      ],
+      "status": "ABSTAIN"
+    },
+    {
+      "failure": "NONE",
+      "attempt": 2,
+      "missing": [],
+      "status": "VERIFIED"
+    }
+  ],
+  "collector_iam": {
+    "allUsers": false,
+    "allAuthenticatedUsers": false,
+    "invoker": "proofos-api-sa only"
+  },
+  "iam_negative_tests": {
+    "anonymous_api_config": "HTTP 403 denied",
+    "authenticated_api_config": "HTTP 200 allowed",
+    "anonymous_collector_collect": "HTTP 403 denied"
+  },
+  "attestation": {
+    "accepted": true,
+    "journal_event_digest_sha256": "4e7a57c0986746c2ce79d0eca50607076cda330936a661b7902e9864b26f54da",
+    "outcome": "HEALTHY"
+  },
+  "evidence": [
+    {
+      "kind": "tests",
+      "source": "OBSERVED",
+      "satisfies": true,
+      "collector": "collector-ci-v1"
+    },
+    {
+      "kind": "runtime",
+      "source": "EXECUTOR",
+      "satisfies": true,
+      "collector": "executor-v1",
+      "note": "self-report, refused by verifier"
+    },
+    {
+      "kind": "runtime",
+      "source": "OBSERVED",
+      "satisfies": true,
+      "collector": "collector-http-v1",
+      "note": "signed attestation"
+    }
+  ],
+  "firestore": {
+    "chain_ok": true,
+    "persistence_across_revision": true,
+    "backend": "firestore",
+    "event_count": 45
+  },
+  "cloud_logging": {
+    "entries": 45,
+    "all_required_event_types_present": true
+  },
+  "secret_leakage_check": {
+    "gemini_key_in_logs": false,
+    "jwt_in_logs": false,
+    "private_key_in_logs": false
+  },
+  "known_limitation": "The collector probes its own /healthz on 127.0.0.1. Cross-service probing of the API is blocked because the API is IAM-protected and the probe carries no OIDC token.",
+  "final_status": "VERIFIED"
+}
