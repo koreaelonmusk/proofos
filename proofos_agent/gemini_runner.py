@@ -99,13 +99,28 @@ def preflight() -> str:
     )
 
 
-def build_action_tool(fleet, task_id: str) -> Callable[[str], str]:
-    """The executor's only tool.
+#: How many times the action may actually run in one execution. The model
+#: stays free to call the tool; the runtime decides how often that call does
+#: work. A live run invoked it seven times for a single-step task, spending
+#: quota and latency on repetition the task never needed.
+MAX_ACTION_INVOCATIONS = 1
+
+
+def build_action_tool(
+    fleet, task_id: str, max_invocations: int = MAX_ACTION_INVOCATIONS
+) -> Callable[[str], str]:
+    """The executor's only tool, with a runtime-owned ceiling.
 
     Named ``perform_action`` because the registry permits exactly that name for
     the executor role, and the agent build refuses anything else. It performs
     work and reports what it did; it writes nothing the verifier will read.
+
+    Past the ceiling the tool still answers -- truthfully, saying the work is
+    already done -- rather than erroring. A model that is told "already
+    complete" stops; one that is handed an error tends to retry, which is the
+    behaviour being bounded.
     """
+    performed: list[str] = []
 
     def perform_action(instruction: str) -> str:
         """Carry out the assigned action and report what was done.
@@ -116,8 +131,16 @@ def build_action_tool(fleet, task_id: str) -> Callable[[str], str]:
         Returns:
             A short description of what was done. Not evidence.
         """
-        return fleet.executor.execute(task_id, lambda: f"applied: {instruction}")
+        if len(performed) >= max_invocations:
+            return (
+                f"Already completed for task {task_id}: {performed[-1]}. "
+                "No further action is needed; report what was done."
+            )
+        result = fleet.executor.execute(task_id, lambda: f"applied: {instruction}")
+        performed.append(result)
+        return result
 
+    perform_action.invocations = performed  # type: ignore[attr-defined]
     return perform_action
 
 
