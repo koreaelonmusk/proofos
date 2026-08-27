@@ -1,108 +1,139 @@
 {
   "note": "Sanitized record of ProofOS on Google Cloud Run. No credentials, tokens, or key material.",
-  "timestamp_utc": "2026-08-26T08:26:40Z",
+  "timestamp_utc": "2026-08-27T07:56:56Z",
   "project_id": "proofos-agentic-260822-7782",
   "region": "asia-northeast3",
   "reproducibility": {
-    "source_commit": "ba2aab5c",
-    "source_commit_full": "ba2aab5a1b78b82be3beec589d53314e11e45900",
-    "local_head_matches_pr_head": true,
+    "source_commit": "ba2aab5",
+    "source_commit_full": "ba2aab5c",
     "api_image_digest": "sha256:4cc5a18fa0a32559e02b7785496c4145d48d4232d11431f2e26bf10ee0e77ce8",
     "collector_image_digest": "sha256:804cec33d56d5899d9b30d80b63cc9079f6e94bd86e1b25c85d82d07d43f5af4",
-    "api_revision": "proofos-api-00008-xf9",
-    "collector_revision": "proofos-collector-00004-2mf",
-    "note": "Images tagged with the short commit SHA; tag ba2aab5 is a real repo commit."
+    "api_revision": "proofos-api-00009-f2s",
+    "collector_revision": "proofos-collector-00004-2mf"
   },
   "service_accounts": {
     "collector": "proofos-collector-sa",
     "api": "proofos-api-sa"
   },
-  "d17_resolution": {
-    "problem": "The collector could only reach anonymous endpoints, so on Cloud Run it observed its own health endpoint instead of the service under scrutiny.",
-    "fix": "The collector presents its own Cloud Run service identity (Google OIDC) when a server-owned profile declares the target protected. It never receives or reuses the caller's credential.",
-    "fail_closed": "Failure to obtain a token raises; it never falls back to an anonymous probe.",
-    "cross_service_target": "proofos-api /health (IAM-protected)",
-    "anonymous_probe_result": "HTTP 403 denied",
-    "authenticated_probe_result": "HTTP 200 {status: ok}",
-    "proven_by_execution": "exec_27fe54f2b8684ae4"
-  },
-  "executor_tool_bound": {
-    "problem": "A live run invoked perform_action seven times for a single-step task.",
-    "fix": "The runtime caps how often the action actually runs; past the ceiling the tool truthfully reports the work is already done rather than erroring.",
-    "default_ceiling": 1
-  },
-  "cross_service_execution": {
-    "execution_id": "exec_27fe54f2b8684ae4",
-    "agent_runtime": "deterministic",
-    "decisions": [
+  "live_gemini_cloud_execution": {
+    "status": "PROVEN",
+    "execution_id": "exec_134507744bce4546",
+    "agent_runtime": "gemini",
+    "live_model_enabled": true,
+    "model": "gemini-3.5-flash",
+    "credential_mode": "gemini-api-key (Secret Manager)",
+    "agent_turns": [
+      {
+        "tools": [],
+        "duration_ms": 15712,
+        "role": "planner"
+      },
+      {
+        "note": "the model called the tool twice; the runtime ceiling let it run once",
+        "tools": [
+          "perform_action",
+          "perform_action"
+        ],
+        "duration_ms": 50952,
+        "role": "executor",
+        "actual_executions": 1
+      },
+      {
+        "tools": [
+          "verify_task_completion"
+        ],
+        "attempt": 1,
+        "duration_ms": 19979,
+        "role": "verifier"
+      },
+      {
+        "tools": [
+          "verify_task_completion"
+        ],
+        "attempt": 2,
+        "duration_ms": 18223,
+        "role": "verifier"
+      }
+    ],
+    "verifier_decisions": [
       {
         "status": "ABSTAIN",
+        "failure": "EVIDENCE_UNTRUSTED",
         "attempt": 1,
         "missing": [
           "runtime"
-        ],
-        "failure": "EVIDENCE_UNTRUSTED"
+        ]
       },
       {
         "status": "VERIFIED",
+        "failure": "NONE",
         "attempt": 2,
-        "failure": "NONE"
+        "missing": []
       }
     ],
     "evidence": [
       {
+        "source": "OBSERVED",
+        "satisfies": true,
+        "kind": "tests",
+        "collector": "collector-ci-v1"
+      },
+      {
         "source": "EXECUTOR",
+        "satisfies": true,
         "kind": "runtime",
         "collector": "executor-v1",
-        "note": "self-report, refused",
-        "satisfies": true
+        "note": "self-report, refused by the verifier"
       },
       {
         "source": "OBSERVED",
+        "satisfies": true,
         "kind": "runtime",
         "collector": "collector-http-v1",
-        "note": "signed attestation from authenticated cross-service probe",
-        "satisfies": true
+        "note": "signed attestation from an authenticated cross-service probe"
       }
     ],
-    "firestore": {
-      "event_count": 27,
-      "chain_ok": true
+    "cross_service_observation": {
+      "collector_identity": "proofos-collector-sa (own Cloud Run identity, Google OIDC)",
+      "target": "proofos-api /health (IAM-protected)",
+      "anonymous_probe": "HTTP 403 denied",
+      "authenticated_probe": "HTTP 200",
+      "attestation_accepted": true,
+      "attestation_outcome": "HEALTHY",
+      "attestation_event_digest_sha256": "833a339bbdd1df06dd80bdbc780a7a86675a4642a003b2b2522efdb1211efc16"
     },
-    "cloud_logging_entries": 27,
+    "firestore": {
+      "event_count": 29,
+      "chain_ok": true,
+      "chain_problems": 0
+    },
+    "cloud_logging": {
+      "all_required_event_types_present": true,
+      "entries": 29
+    },
     "final_status": "VERIFIED"
-  },
-  "live_gemini_cloud": {
-    "status": "PROVEN BEFORE THE D17 FIX ONLY",
-    "execution_id": "exec_8a09be3ac5a44810",
-    "final_status": "VERIFIED",
-    "caveat": "That run predates the cross-service fix; the collector observed its own health endpoint. A live run WITH the fix is NOT PROVEN -- both attempts hit the Gemini free-tier daily quota (20 requests/day).",
-    "failed_attempts": [
-      "exec_0a3fa0039d2e442a",
-      "exec_4b426e5dfb4e43ac"
-    ],
-    "failure_reason": "_ResourceExhaustedError (GenerateRequestsPerDayPerProjectPerModel-FreeTier)"
   },
   "iam": {
     "collector_invoker": "proofos-api-sa only",
-    "api_invoker": "proofos-collector-sa (added for cross-service probing)",
+    "api_invoker": "proofos-collector-sa (for cross-service probing)",
     "allUsers": false,
     "allAuthenticatedUsers": false,
     "negative_tests": {
-      "authenticated_api_health": "HTTP 200",
       "anonymous_api_health": "HTTP 403",
+      "authenticated_api_health": "HTTP 200",
       "anonymous_collector_collect": "HTTP 403"
     }
   },
   "secret_leakage_check": {
-    "token_in_probe_result": false,
+    "jwt_in_logs": false,
     "private_key_in_logs": false,
-    "gemini_key_in_logs": false,
-    "jwt_in_logs": false
+    "key_shaped_strings_in_logs": false,
+    "gemini_key_in_logs": false
   },
   "known_limitations": [
     "Cloud Run's front end intercepts /healthz and returns HTML 404; /health is used instead.",
-    "Cloud Run request timeout raised to 900s because live turns with pacing exceed the 300s default."
+    "Cloud Run request timeout raised to 900s; live turns with pacing exceed the 300s default.",
+    "Gemini free tier allows 20 requests/day, which one execution largely consumes."
   ],
   "test_count": 442
 }
