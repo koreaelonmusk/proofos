@@ -93,9 +93,16 @@ def render(config: dict, outcome: dict, audit: dict) -> str:
 
     lines += ["", "  evidence:"]
     for item in outcome.get("evidence", []):
+        # accepted and satisfies are separate questions, and the demo's whole
+        # point is the row where they differ from a sound-looking record.
+        verdict = (
+            "ACCEPTED"
+            if item.get("satisfies_requirement")
+            else f"REFUSED ({item.get('rejection_reason', '')[:44]})"
+        )
         lines.append(
             f"    {item['kind']:<8} {item['source']:<9} by {item['collector']:<20}"
-            f" satisfies={item['satisfies_requirement']}"
+            f" {verdict}"
         )
 
     lines += [

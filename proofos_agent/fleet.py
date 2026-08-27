@@ -44,7 +44,11 @@ from proofos.registry import (
     VERIFIER_ID,
     AgentRegistry,
 )
-from proofos.verifier import Requirement, VerificationStatus
+from proofos.verifier import (
+    EvidenceAssessment,
+    Requirement,
+    VerificationStatus,
+)
 
 
 # -- scoped contexts -----------------------------------------------------------
@@ -224,6 +228,11 @@ class VerificationDecision:
     reason: str
     missing: tuple[str, ...]
     failure: str
+    #: Per-item outcome from the verifier that produced this decision. Carried
+    #: so reporting can show why an item counted without deciding that for
+    #: itself. Not journalled: the audit trail records decisions, and evidence
+    #: acceptance is already derivable from the decision plus the ledger.
+    assessments: tuple[EvidenceAssessment, ...] = ()
 
 
 class Verifier:
@@ -239,6 +248,7 @@ class Verifier:
             reason=result.reason,
             missing=result.missing,
             failure=result.failure.value,
+            assessments=result.assessments,
         )
         self._ctx.audit.record(
             EventType.VERIFIER_DECISION,

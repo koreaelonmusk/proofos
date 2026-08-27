@@ -123,18 +123,71 @@ def root() -> dict[str, Any]:
     }
 
 
-def _response(outcome: dict[str, Any], ledger) -> dict[str, Any]:
-    return {
-        "journal_backend": JOURNAL.backend,
-        **CONFIG.describe(),
-        "evidence": [
+def _evidence_view(outcome: dict[str, Any], ledger) -> tuple[list[dict], int | None]:
+    """Render each evidence item as the verifier actually treated it.
+
+    The three flags come from the verifier that produced the verdict, keyed by
+    evidence id. This layer decides nothing. An earlier version reported
+    ``satisfies_requirement = item.valid``, which is integrity, not acceptance
+    -- so a self-report the verifier had just refused was displayed as
+    satisfying, in the one direction that flatters the system.
+
+    Acceptance belongs to an attempt, not to the evidence. The flags here
+    describe the last attempt; ``attempts`` carries the rest.
+    """
+    decisions = outcome.get("decisions") or []
+    final = decisions[-1] if decisions else None
+    attempt = final.get("attempt") if final else None
+    assessed = {a["evidence_id"]: a for a in (final or {}).get("evidence", [])}
+
+    view = []
+    for item in ledger.evidence(scenario.TASK_ID):
+        assessment = assessed.get(item.content_hash)
+        if assessment is None:
+            # Recorded after the last verification, so no verifier has ruled on
+            # it. Reported as not accepted, never as accepted by default.
+            view.append(
+                {
+                    "kind": item.kind,
+                    "source": str(item.source),
+                    "collector": item.collector,
+                    "integrity_valid": item.intact and item.valid,
+                    "accepted_by_verifier": False,
+                    "satisfies_requirement": False,
+                    "rejection_reason": "No verification attempt has assessed this item.",
+                }
+            )
+            continue
+        view.append(
             {
                 "kind": item.kind,
                 "source": str(item.source),
                 "collector": item.collector,
-                "satisfies_requirement": item.valid,
+                "integrity_valid": assessment["integrity_valid"],
+                "accepted_by_verifier": assessment["accepted_by_verifier"],
+                "satisfies_requirement": assessment["satisfies_requirement"],
+                "rejection_reason": assessment["rejection_reason"],
             }
-            for item in ledger.evidence(scenario.TASK_ID)
+        )
+    return view, attempt
+
+
+def _response(outcome: dict[str, Any], ledger) -> dict[str, Any]:
+    evidence, attempt = _evidence_view(outcome, ledger)
+    return {
+        "journal_backend": JOURNAL.backend,
+        **CONFIG.describe(),
+        "evidence": evidence,
+        "evidence_as_of_attempt": attempt,
+        "attempts": [
+            {
+                "attempt": d.get("attempt"),
+                "decision": d.get("status"),
+                "failure": d.get("failure"),
+                "missing": d.get("missing"),
+                "evidence": d.get("evidence", []),
+            }
+            for d in (outcome.get("decisions") or [])
         ],
         **outcome,
     }

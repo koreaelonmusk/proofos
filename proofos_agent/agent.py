@@ -73,21 +73,35 @@ def _check_tools(registry: AgentRegistry, agent_id: str, tools: list[Callable]) 
         registry.require_tool(agent_id, tool.__name__)
 
 
-def build_verifier_agent(
+def build_verifier_agent_with_tool(
     ledger: EvidenceLedger, registry: AgentRegistry | None = None
-) -> Agent:
-    """The verifier agent, bound to one ledger for one execution."""
+) -> tuple[Agent, Callable]:
+    """The verifier agent and the tool it was built with.
+
+    The runtime keeps a reference to the tool so it can read the full
+    verification results afterwards for reporting. The agent is handed exactly
+    the same tool it always was; holding a reference confers no authority the
+    runtime did not already have.
+    """
     registry = registry or default_registry()
     verify_task_completion = build_verification_tool(ledger)
     _check_tools(registry, VERIFIER_ID, [verify_task_completion])
 
-    return Agent(
+    agent = Agent(
         name="proofos_verifier",
         model=MODEL,
         description="Evidence-first completion verifier.",
         instruction=VERIFIER_INSTRUCTION,
         tools=[verify_task_completion],
     )
+    return agent, verify_task_completion
+
+
+def build_verifier_agent(
+    ledger: EvidenceLedger, registry: AgentRegistry | None = None
+) -> Agent:
+    """The verifier agent, bound to one ledger for one execution."""
+    return build_verifier_agent_with_tool(ledger, registry)[0]
 
 
 def build_executor_agent(

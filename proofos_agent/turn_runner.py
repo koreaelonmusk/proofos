@@ -158,6 +158,16 @@ class AgentTurnRunner(Protocol):
     async def aclose(self) -> None: ...
 
 
+def _latest_assessments(verify_tool) -> tuple:
+    """The per-item outcome from the most recent verification, for reporting.
+
+    Mirrors ``decision_from``: when a model calls the tool more than once in a
+    turn, the last completed result stands, so the assessments reported are the
+    ones behind the verdict that was used.
+    """
+    results = getattr(verify_tool, "results", ())
+    return results[-1].assessments if results else ()
+
 class DeterministicTurnRunner:
     """Scripted turns that call the same deterministic components.
 
@@ -180,6 +190,9 @@ class DeterministicTurnRunner:
             "model": self._model,
             "live_model_enabled": False,
         }
+
+    def latest_assessments(self) -> tuple:
+        return _latest_assessments(self._verify_tool)
 
     async def plan(self, task_id: str, goal: str) -> AgentTurn:
         started = time.time()

@@ -467,7 +467,16 @@ class PerExecutionBindingTests(unittest.TestCase):
         from proofos_agent import gemini_runner
 
         source = inspect.getsource(gemini_runner.GeminiAdkTurnRunner.__init__)
-        self.assertIn("build_verifier_agent(ledger", source)
+        # The builder now also hands back the tool so the runtime can read
+        # verification results for reporting; the binding it asserts -- one
+        # verifier per execution, closing over that execution's ledger -- is
+        # unchanged.
+        # The builder now also hands back the tool so the runtime can read
+        # verification results for reporting. The binding this asserts -- one
+        # verifier per execution, closing over that execution's ledger -- is
+        # unchanged.
+        self.assertIn("build_verifier_agent_with_tool(", source)
+        self.assertIn("ledger, self._registry", source)
         module_level = [
             name
             for name in dir(gemini_runner)

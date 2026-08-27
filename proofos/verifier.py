@@ -97,23 +97,83 @@ class Requirement:
 
 
 @dataclass(frozen=True)
+class EvidenceAssessment:
+    """Why one evidence item did or did not count, for this decision.
+
+    A reporting projection, not a second opinion. Every field here is produced
+    by the same pass that produced the verdict, so a presentation layer can
+    render what the verifier did without re-deriving trust rules of its own --
+    which is how a rejected self-report came to be displayed as satisfying.
+
+    The three flags are deliberately distinct:
+
+    ``integrity_valid``
+        The record is internally sound: it matches its own digest, is not
+        marked invalid, and carries a value. True for an honest self-report.
+    ``accepted_by_verifier``
+        The record survived the trust policy for a requirement of its kind --
+        trusted provenance, within the freshness horizon, integrity intact.
+    ``satisfies_requirement``
+        The record was actually among those that settled a requirement. A
+        trusted-but-superseded observation is accepted and does not satisfy.
+
+    Acceptance is a fact about one decision, not a property of the evidence.
+    The same item can be rejected at attempt 1 and irrelevant at attempt 2.
+    """
+
+    evidence_id: str
+    kind: str
+    source: str
+    collector: str
+    integrity_valid: bool
+    accepted_by_verifier: bool
+    satisfies_requirement: bool
+    rejection_reason: str = ""
+
+    def as_dict(self) -> dict:
+        return {
+            "evidence_id": self.evidence_id,
+            "kind": self.kind,
+            "source": self.source,
+            "collector": self.collector,
+            "integrity_valid": self.integrity_valid,
+            "accepted_by_verifier": self.accepted_by_verifier,
+            "satisfies_requirement": self.satisfies_requirement,
+            "rejection_reason": self.rejection_reason,
+        }
+
+
+@dataclass(frozen=True)
 class VerificationResult:
     status: VerificationStatus
     reason: str
     missing: tuple[str, ...] = ()
     failure: FailureClass = FailureClass.NONE
+    assessments: tuple[EvidenceAssessment, ...] = ()
+
+    @property
+    def accepted_evidence_ids(self) -> tuple[str, ...]:
+        return tuple(a.evidence_id for a in self.assessments if a.accepted_by_verifier)
+
+    @property
+    def rejected_evidence_ids(self) -> tuple[str, ...]:
+        return tuple(
+            a.evidence_id for a in self.assessments if not a.accepted_by_verifier
+        )
 
 
 def _abstain(
     reason: str,
     failure: FailureClass,
     missing: tuple[str, ...] = (),
+    assessments: tuple[EvidenceAssessment, ...] = (),
 ) -> VerificationResult:
     return VerificationResult(
         status=VerificationStatus.ABSTAIN,
         reason=reason,
         missing=missing,
         failure=failure,
+        assessments=assessments,
     )
 
 
@@ -185,21 +245,28 @@ def _verify(
         )
 
     if any(not item.intact for item in items):
+        # Nothing is accepted once the set is tampered, and the projection says
+        # so item by item rather than leaving a caller to infer it.
         return _abstain(
             "An evidence record no longer matches its own content hash.",
             FailureClass.EVIDENCE_TAMPERED,
             tuple(r.kind for r in requirements),
+            _assess(items, {}),
         )
 
     reference_time = time.time() if now is None else now
     unsatisfied: list[str] = []
     failures: list[FailureClass] = []
+    outcomes: dict[str, _RequirementOutcome] = {}
 
     for requirement in requirements:
-        failure = _evaluate(requirement, items, reference_time)
-        if failure is not None:
+        outcome = _evaluate(requirement, items, reference_time)
+        outcomes[requirement.kind] = outcome
+        if outcome.failure is not None:
             unsatisfied.append(requirement.kind)
-            failures.append(failure)
+            failures.append(outcome.failure)
+
+    assessments = _assess(items, outcomes)
 
     if unsatisfied:
         distinct = set(failures)
@@ -208,6 +275,7 @@ def _verify(
             "Required evidence is missing, stale, invalid, or self-reported.",
             failure,
             tuple(unsatisfied),
+            assessments,
         )
 
     return VerificationResult(
@@ -216,6 +284,7 @@ def _verify(
             "All required evidence is present, valid, fresh, and "
             "independently sourced."
         ),
+        assessments=assessments,
     )
 
 
@@ -224,19 +293,33 @@ def _timestamp(item: Evidence) -> float:
     return item.collected_at if item.collected_at is not None else float("-inf")
 
 
+@dataclass(frozen=True)
+class _RequirementOutcome:
+    """The verdict for one requirement, plus the items that produced it."""
+
+    failure: FailureClass | None
+    accepted: tuple[Evidence, ...] = ()
+    governing: tuple[Evidence, ...] = ()
+
+
 def _evaluate(
     requirement: Requirement,
     items: tuple[Evidence, ...],
     now: float,
-) -> FailureClass | None:
-    """Return the failure class for a requirement, or None if it is satisfied."""
+) -> _RequirementOutcome:
+    """Decide one requirement and report which evidence decided it.
+
+    The decision path is unchanged; the sets it walks are now returned instead
+    of discarded, so reporting can describe the same selection rather than
+    guess at it.
+    """
     matching = [item for item in items if item.kind.strip() == requirement.kind]
     if not matching:
-        return FailureClass.EVIDENCE_MISSING
+        return _RequirementOutcome(FailureClass.EVIDENCE_MISSING)
 
     trusted = [item for item in matching if item.source in TRUSTED_SOURCES]
     if not trusted:
-        return FailureClass.EVIDENCE_UNTRUSTED
+        return _RequirementOutcome(FailureClass.EVIDENCE_UNTRUSTED)
 
     if requirement.max_age_seconds is not None:
         horizon = now - requirement.max_age_seconds
@@ -248,7 +331,7 @@ def _evaluate(
         if not fresh:
             # Undated evidence is treated as stale: an observation that cannot
             # be placed in time cannot be shown to still hold.
-            return FailureClass.EVIDENCE_STALE
+            return _RequirementOutcome(FailureClass.EVIDENCE_STALE)
         trusted = fresh
 
     # The most recent observation governs. An older failed probe does not veto a
@@ -259,6 +342,82 @@ def _evaluate(
 
     # Observations that are equally recent and disagree are unresolvable.
     if any(not item.valid or not item.value.strip() for item in governing):
-        return FailureClass.EVIDENCE_INVALID
+        return _RequirementOutcome(
+            FailureClass.EVIDENCE_INVALID, tuple(trusted), tuple(governing)
+        )
 
-    return None
+    return _RequirementOutcome(None, tuple(trusted), tuple(governing))
+
+
+def _integrity_valid(item: Evidence) -> bool:
+    """Internally sound: matches its digest, not marked invalid, carries a value."""
+    return item.intact and item.valid and bool(item.value.strip())
+
+
+def _assess(
+    items: tuple[Evidence, ...],
+    outcomes: dict[str, _RequirementOutcome],
+) -> tuple[EvidenceAssessment, ...]:
+    """Project the decision onto each evidence item.
+
+    Nothing here re-decides anything: acceptance is membership in a set the
+    verifier already built, and the reason is read off the same failure class.
+    """
+    accepted_ids: dict[int, str] = {}
+    governing_ids: dict[int, str] = {}
+    for kind, outcome in outcomes.items():
+        for item in outcome.accepted:
+            accepted_ids[id(item)] = kind
+        if outcome.failure is None:
+            for item in outcome.governing:
+                governing_ids[id(item)] = kind
+
+    assessments = []
+    for item in items:
+        kind = item.kind.strip()
+        outcome = outcomes.get(kind)
+        # Acceptance presupposes integrity. An item can reach the trusted pool
+        # on provenance alone -- the kernel only tests validity on the items
+        # that govern -- but reporting an unsound record as accepted would
+        # overstate what the verifier did.
+        accepted = id(item) in accepted_ids and _integrity_valid(item)
+        satisfies = id(item) in governing_ids
+        assessments.append(
+            EvidenceAssessment(
+                evidence_id=item.content_hash,
+                kind=item.kind,
+                source=str(item.source),
+                collector=item.collector,
+                integrity_valid=_integrity_valid(item),
+                accepted_by_verifier=accepted,
+                satisfies_requirement=satisfies,
+                rejection_reason=_rejection_reason(item, outcome, accepted, satisfies),
+            )
+        )
+    return tuple(assessments)
+
+
+def _rejection_reason(
+    item: Evidence,
+    outcome: _RequirementOutcome | None,
+    accepted: bool,
+    satisfies: bool,
+) -> str:
+    if satisfies:
+        return ""
+    if outcome is None:
+        return "No requirement of this kind was declared for this task."
+    if not item.intact:
+        return "The record no longer matches its own content hash."
+    if item.source not in TRUSTED_SOURCES:
+        return (
+            f"Provenance is {item.source}; only {'/'.join(sorted(TRUSTED_SOURCES))} "
+            "evidence originates outside the agent under scrutiny."
+        )
+    if not item.valid or not item.value.strip():
+        return "Marked invalid or empty, so it cannot settle the requirement."
+    if not accepted:
+        if outcome.failure is FailureClass.EVIDENCE_STALE:
+            return "Outside the freshness horizon declared by the requirement."
+        return f"Not accepted for this requirement: {outcome.failure}."
+    return "Superseded by a more recent observation of the same kind."

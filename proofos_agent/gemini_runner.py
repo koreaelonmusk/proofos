@@ -31,7 +31,7 @@ from .agent import (
     MODEL,
     build_executor_agent,
     build_planner_agent,
-    build_verifier_agent,
+    build_verifier_agent_with_tool,
 )
 from .turn_runner import ACTION_TOOL, VERIFY_TOOL, AgentTurn, ToolInvocation
 
@@ -170,7 +170,9 @@ class GeminiAdkTurnRunner:
         self._executor = build_executor_agent(
             build_action_tool(fleet, task_id), self._registry
         )
-        self._verifier = build_verifier_agent(ledger, self._registry)
+        self._verifier, self._verify_tool = build_verifier_agent_with_tool(
+            ledger, self._registry
+        )
 
         self._runners: dict[str, InMemoryRunner] = {}
         self._sessions: dict[str, str] = {}
@@ -182,6 +184,11 @@ class GeminiAdkTurnRunner:
             "live_model_enabled": True,
             "credential_mode": self._credential_mode,
         }
+
+    def latest_assessments(self) -> tuple:
+        from .turn_runner import _latest_assessments
+
+        return _latest_assessments(self._verify_tool)
 
     # -- ADK plumbing -------------------------------------------------------
 

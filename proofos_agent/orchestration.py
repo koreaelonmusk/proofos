@@ -90,6 +90,10 @@ async def run_multi_agent_execution(
                     "failure": decision.failure,
                     "missing": list(decision.missing),
                     "reason": decision.reason,
+                    # Which evidence this attempt accepted, from the verifier
+                    # that decided it. Acceptance is per attempt, so it is
+                    # recorded per attempt.
+                    "evidence": [a.as_dict() for a in decision.assessments],
                 }
             )
 
@@ -304,6 +308,7 @@ async def run_agent_execution(
                 break
 
             decision = extraction.decision
+            assessments = getattr(turn_runner, "latest_assessments", lambda: ())()
             decisions.append(
                 {
                     "attempt": attempt,
@@ -311,6 +316,10 @@ async def run_agent_execution(
                     "failure": decision.get("failure"),
                     "missing": list(decision.get("missing") or []),
                     "reason": decision.get("reason"),
+                    # Which evidence this attempt accepted, read from the
+                    # verifier that produced the verdict above -- not
+                    # re-derived here, and never from the model's prose.
+                    "evidence": [a.as_dict() for a in assessments],
                     # Kept so a reviewer can read prose and verdict side by side.
                     "model_text": turn.final_text[:200],
                 }

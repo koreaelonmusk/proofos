@@ -16,11 +16,25 @@ from __future__ import annotations
 from typing import Callable
 
 from proofos.ledger import EvidenceLedger, EvidenceTamperedError, UnknownTaskError
-from proofos.verifier import FailureClass, VerificationStatus, verify_completion
+from proofos.verifier import (
+    FailureClass,
+    VerificationResult,
+    VerificationStatus,
+    verify_completion,
+)
 
 
 def build_verification_tool(ledger: EvidenceLedger) -> Callable[[str, str], dict]:
-    """Return a verification tool that reads only from ``ledger``."""
+    """Return a verification tool that reads only from ``ledger``.
+
+    Each full ``VerificationResult`` is kept on the returned function as
+    ``.results``, in call order. That list is a runtime-owned side channel for
+    reporting: it lets the service explain which evidence the verifier accepted
+    without the presentation layer re-deriving trust rules. It deliberately
+    does not travel back to the model -- the dict below is unchanged, so
+    nothing about reporting alters what the verifier is asked or answers.
+    """
+    results: list[VerificationResult] = []
 
     def verify_task_completion(task_id: str, claim: str) -> dict:
         """Verify a completion claim for a task against independently collected evidence.
@@ -57,6 +71,7 @@ def build_verification_tool(ledger: EvidenceLedger) -> Callable[[str, str], dict
             required_kinds=required,
         )
 
+        results.append(result)
         return {
             "status": result.status.value,
             "reason": result.reason,
@@ -64,4 +79,5 @@ def build_verification_tool(ledger: EvidenceLedger) -> Callable[[str, str], dict
             "failure": result.failure.value,
         }
 
+    verify_task_completion.results = results  # type: ignore[attr-defined]
     return verify_task_completion

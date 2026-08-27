@@ -268,3 +268,109 @@ class ServiceTrustBoundaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AttemptAwareReportingTests(unittest.TestCase):
+    """D19: the response must describe acceptance per attempt, not per object.
+
+    A single execution refuses the executor's self-report at attempt 1 and
+    accepts a collector observation at attempt 2. Reporting that as one flat
+    list of evidence loses the only interesting fact in the run, and reporting
+    it from ``item.valid`` inverts it.
+    """
+
+    service: RunningService
+
+    @classmethod
+    def setUpClass(cls):
+        cls.service = RunningService()
+        cls.service.start()
+        cls._saved = os.environ.get("PROOFOS_HEALTH_URL")
+        os.environ["PROOFOS_HEALTH_URL"] = f"{cls.service.base}/healthz"
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._saved is None:
+            os.environ.pop("PROOFOS_HEALTH_URL", None)
+        else:
+            os.environ["PROOFOS_HEALTH_URL"] = cls._saved
+        cls.service.stop()
+
+    def run_one(self):
+        _, body = self.service.post("/executions", {"claim": "Bug fixed"})
+        return body
+
+    def test_attempt_one_abstains_and_accepts_no_runtime_evidence(self):
+        body = self.run_one()
+        first = body["attempts"][0]
+        self.assertEqual(first["attempt"], 1)
+        self.assertEqual(first["decision"], "ABSTAIN")
+        self.assertEqual(first["failure"], "EVIDENCE_UNTRUSTED")
+
+        runtime = [e for e in first["evidence"] if e["kind"] == "runtime"]
+        self.assertTrue(runtime, "the self-report should be visible, not hidden")
+        for item in runtime:
+            self.assertEqual(item["source"], "EXECUTOR")
+            # Sound, and refused. Both facts are stated.
+            self.assertTrue(item["integrity_valid"])
+            self.assertFalse(item["accepted_by_verifier"])
+            self.assertFalse(item["satisfies_requirement"])
+            self.assertIn("EXECUTOR", item["rejection_reason"])
+
+    def test_attempt_two_verifies_on_the_observation_not_the_claim(self):
+        body = self.run_one()
+        second = body["attempts"][1]
+        self.assertEqual(second["attempt"], 2)
+        self.assertEqual(second["decision"], "VERIFIED")
+
+        by_source = {
+            (e["kind"], e["source"]): e for e in second["evidence"]
+        }
+        executor = by_source[("runtime", "EXECUTOR")]
+        collector = by_source[("runtime", "OBSERVED")]
+
+        self.assertTrue(executor["integrity_valid"])
+        self.assertFalse(executor["accepted_by_verifier"])
+        self.assertFalse(executor["satisfies_requirement"])
+
+        self.assertTrue(collector["integrity_valid"])
+        self.assertTrue(collector["accepted_by_verifier"])
+        self.assertTrue(collector["satisfies_requirement"])
+        self.assertEqual(collector["collector"], "collector-http-v1")
+
+    def test_the_same_evidence_is_reported_differently_across_attempts(self):
+        # The executor's claim exists at both attempts and is refused at both;
+        # the observation exists only at the second. Acceptance is a property
+        # of a decision, and the response has to show that.
+        body = self.run_one()
+        kinds = [
+            {(e["kind"], e["source"]) for e in a["evidence"]}
+            for a in body["attempts"]
+        ]
+        self.assertIn(("runtime", "EXECUTOR"), kinds[0])
+        self.assertNotIn(("runtime", "OBSERVED"), kinds[0])
+        self.assertIn(("runtime", "OBSERVED"), kinds[1])
+
+    def test_the_flat_evidence_list_says_which_attempt_it_describes(self):
+        body = self.run_one()
+        self.assertEqual(body["evidence_as_of_attempt"], len(body["attempts"]))
+
+    def test_no_evidence_item_reports_satisfies_as_item_validity(self):
+        # The mutation, checked at the API boundary: the executor's runtime
+        # claim is a valid record that must not read as satisfying.
+        body = self.run_one()
+        executor = [
+            e
+            for e in body["evidence"]
+            if e["kind"] == "runtime" and e["source"] == "EXECUTOR"
+        ]
+        self.assertEqual(len(executor), 1)
+        self.assertTrue(executor[0]["integrity_valid"])
+        self.assertFalse(executor[0]["satisfies_requirement"])
+
+    def test_reporting_did_not_change_the_verdict(self):
+        body = self.run_one()
+        self.assertEqual(body["final_status"], "VERIFIED")
+        self.assertEqual(
+            [d["status"] for d in body["decisions"]], ["ABSTAIN", "VERIFIED"]
+        )
