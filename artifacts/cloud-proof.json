@@ -1,6 +1,6 @@
 {
   "note": "Sanitized record of ProofOS on Google Cloud Run. No credentials, tokens, or key material.",
-  "timestamp_utc": "2026-08-27T13:43:25Z",
+  "timestamp_utc": "2026-08-27T14:11:46Z",
   "project_id": "proofos-agentic-260822-7782",
   "region": "asia-northeast3",
   "reproducibility": {
@@ -9,7 +9,30 @@
     "api_image_digest": "sha256:49c972633531aaaa1108bd1fedd1df6c86a70009a82724d0a174fc61948644b9",
     "collector_image_digest": "sha256:ab274874b03585be2cb1c65a0ad1a89fd8a285a3ab271cead82ac52e2ae04162",
     "api_revision": "proofos-api-00009-f2s",
-    "collector_revision": "proofos-collector-00004-2mf"
+    "collector_revision": "proofos-collector-00004-2mf",
+    "proven_execution_ran_on": {
+      "api_revision": "proofos-api-00009-f2s",
+      "api_image_digest": "sha256:49c972633531aaaa1108bd1fedd1df6c86a70009a82724d0a174fc61948644b9",
+      "collector_revision": "proofos-collector-00004-2mf",
+      "collector_image_digest": "sha256:ab274874b03585be2cb1c65a0ad1a89fd8a285a3ab271cead82ac52e2ae04162",
+      "source_commit": "04117c2"
+    },
+    "currently_deployed": {
+      "source_commit": "c09e8fb",
+      "source_commit_full": "c09e8fb62222249175f91254c8dd34dff2f3d2fc",
+      "api_revision": "proofos-api-00010-pfd",
+      "api_image_digest": "sha256:679ad261ec308bbfa3502e6ec8b0708a6a6ed39f37402e1a5cf424d5d18dfc9d",
+      "collector_revision": "proofos-collector-00004-2mf (unchanged, not redeployed)",
+      "change": "reporting semantics only (D19). No change to verification logic, trust rules, or collector.",
+      "validated_without_gemini": {
+        "health": "HTTP 200",
+        "config": "unchanged",
+        "persisted_replay": "byte-identical to pre-fix response",
+        "anonymous_probe": "HTTP 403 denied"
+      },
+      "live_gemini_not_re_exercised": "Deliberate: no Gemini quota was consumed to validate this revision. The POST /executions path on 00010-pfd has not been run against a live model in cloud. Its response shape is covered by 462 local tests including real-HTTP service tests.",
+      "rollback": "gcloud run services update-traffic proofos-api --to-revisions=proofos-api-00009-f2s=100"
+    }
   },
   "service_accounts": {
     "collector": "proofos-collector-sa",
@@ -161,12 +184,62 @@
     "Cloud Run's front end intercepts /healthz and returns HTML 404; /health is used instead.",
     "Cloud Run request timeout raised to 900s; live turns with pacing exceed the 300s default.",
     "Gemini free tier allows 20 requests/day, which one execution largely consumes.",
-    "The /executions response labels each evidence item satisfies_requirement, but that field is item.valid -- 'not tampered', not 'accepted by the verifier'. EXECUTOR-sourced evidence therefore shows true while the verifier refuses it. Reporting defect only; the gate itself is proven by the attempt-1 ABSTAIN."
+    "The evidence ledger is per-execution and is not persisted, so a historical execution cannot be re-rendered through the corrected reporting path. The corrected rendering is demonstrated on live executions; the persisted audit trail is unaffected by the fix."
   ],
-  "test_count": 442,
+  "test_count": 462,
   "prior_live_gemini_cloud_execution": {
     "execution_id": "exec_134507744bce4546",
     "final_status": "VERIFIED",
     "note": "Earlier run on the same architecture. Retained for comparison; superseded by the record below."
+  },
+  "reporting_semantics": {
+    "status": "D19 RESOLVED",
+    "defect": "The /executions response computed satisfies_requirement = item.valid, which is integrity rather than acceptance. A valid EXECUTOR self-report that the verifier had refused was therefore rendered as satisfying.",
+    "scope": "Presentation layer only. The verification kernel was correct throughout, as the attempt-1 ABSTAIN in every recorded execution shows.",
+    "fields": {
+      "integrity_valid": "The record is internally sound: matches its own digest, not marked invalid, non-empty. True for an honest self-report.",
+      "accepted_by_verifier": "The record survived the trust policy for a requirement of its kind: trusted provenance, within the freshness horizon, integrity intact.",
+      "satisfies_requirement": "The record was among the items that actually settled a requirement. A trusted but superseded observation is accepted and does not satisfy."
+    },
+    "source_of_truth": "proofos.verifier.verify_completion returns EvidenceAssessment per item, built by the same pass that produced the verdict. The API joins on evidence_id and copies; it holds no trust rules of its own.",
+    "attempt_aware": "Acceptance belongs to an attempt, not to the evidence object. The response carries attempts[] with per-attempt assessments, and the flat evidence list is stamped with evidence_as_of_attempt.",
+    "model_facing_payload": "Unchanged. Assessments travel on a runtime-owned side channel, so a reporting change cannot become a prompt change.",
+    "worked_example": {
+      "attempt_1": {
+        "decision": "ABSTAIN",
+        "failure": "EVIDENCE_UNTRUSTED",
+        "runtime_EXECUTOR": {
+          "integrity_valid": true,
+          "accepted_by_verifier": false,
+          "satisfies_requirement": false,
+          "rejection_reason": "Provenance is EXECUTOR; only OBSERVED evidence originates outside the agent under scrutiny."
+        }
+      },
+      "attempt_2": {
+        "decision": "VERIFIED",
+        "runtime_EXECUTOR": {
+          "integrity_valid": true,
+          "accepted_by_verifier": false,
+          "satisfies_requirement": false
+        },
+        "runtime_OBSERVED": {
+          "integrity_valid": true,
+          "accepted_by_verifier": true,
+          "satisfies_requirement": true,
+          "collector": "collector-http-v1"
+        }
+      }
+    },
+    "mutation_tested": [
+      {
+        "mutation": "satisfies_requirement = item.valid (restore D19)",
+        "tests_killed": 12
+      },
+      {
+        "mutation": "accepted_by_verifier = True",
+        "tests_killed": 7
+      }
+    ],
+    "historical_audit_log": "Not rewritten. exec_11149354f8634b57 replays byte-identical before and after the fix, chain_ok=True, and no assessment field was injected into any persisted event."
   }
 }
