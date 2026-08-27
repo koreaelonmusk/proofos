@@ -1,13 +1,13 @@
 {
   "note": "Sanitized record of ProofOS on Google Cloud Run. No credentials, tokens, or key material.",
-  "timestamp_utc": "2026-08-27T07:56:56Z",
+  "timestamp_utc": "2026-08-27T13:43:25Z",
   "project_id": "proofos-agentic-260822-7782",
   "region": "asia-northeast3",
   "reproducibility": {
-    "source_commit": "ba2aab5",
-    "source_commit_full": "ba2aab5c",
-    "api_image_digest": "sha256:4cc5a18fa0a32559e02b7785496c4145d48d4232d11431f2e26bf10ee0e77ce8",
-    "collector_image_digest": "sha256:804cec33d56d5899d9b30d80b63cc9079f6e94bd86e1b25c85d82d07d43f5af4",
+    "source_commit": "1b90917",
+    "source_commit_full": "1b909174ca2d491cf3d660305d6318494659b7f2",
+    "api_image_digest": "sha256:49c972633531aaaa1108bd1fedd1df6c86a70009a82724d0a174fc61948644b9",
+    "collector_image_digest": "sha256:ab274874b03585be2cb1c65a0ad1a89fd8a285a3ab271cead82ac52e2ae04162",
     "api_revision": "proofos-api-00009-f2s",
     "collector_revision": "proofos-collector-00004-2mf"
   },
@@ -17,101 +17,126 @@
   },
   "live_gemini_cloud_execution": {
     "status": "PROVEN",
-    "execution_id": "exec_134507744bce4546",
+    "execution_id": "exec_11149354f8634b57",
+    "task_id": "BUG-4417",
     "agent_runtime": "gemini",
     "live_model_enabled": true,
     "model": "gemini-3.5-flash",
     "credential_mode": "gemini-api-key (Secret Manager)",
+    "wall_clock_seconds": 140,
     "agent_turns": [
       {
-        "tools": [],
-        "duration_ms": 15712,
-        "role": "planner"
+        "role": "planner",
+        "agent_id": "planner-v1",
+        "duration_ms": 12989
       },
       {
-        "note": "the model called the tool twice; the runtime ceiling let it run once",
+        "role": "executor",
+        "agent_id": "executor-v1",
+        "duration_ms": 39142,
         "tools": [
+          "perform_action",
           "perform_action",
           "perform_action"
         ],
-        "duration_ms": 50952,
-        "role": "executor",
-        "actual_executions": 1
+        "actual_executions": 1,
+        "note": "the model called the tool three times; the runtime ceiling let it run once"
       },
       {
-        "tools": [
-          "verify_task_completion"
-        ],
+        "role": "verifier",
+        "agent_id": "verifier-v1",
+        "duration_ms": 19337,
         "attempt": 1,
-        "duration_ms": 19979,
-        "role": "verifier"
-      },
-      {
         "tools": [
           "verify_task_completion"
-        ],
+        ]
+      },
+      {
+        "role": "verifier",
+        "agent_id": "verifier-v1",
+        "duration_ms": 31029,
         "attempt": 2,
-        "duration_ms": 18223,
-        "role": "verifier"
+        "tools": [
+          "verify_task_completion"
+        ]
       }
     ],
     "verifier_decisions": [
       {
+        "attempt": 1,
         "status": "ABSTAIN",
         "failure": "EVIDENCE_UNTRUSTED",
-        "attempt": 1,
         "missing": [
           "runtime"
         ]
       },
       {
+        "attempt": 2,
         "status": "VERIFIED",
         "failure": "NONE",
-        "attempt": 2,
         "missing": []
       }
     ],
     "evidence": [
       {
-        "source": "OBSERVED",
-        "satisfies": true,
         "kind": "tests",
+        "source": "OBSERVED",
         "collector": "collector-ci-v1"
       },
       {
-        "source": "EXECUTOR",
-        "satisfies": true,
         "kind": "runtime",
+        "source": "EXECUTOR",
         "collector": "executor-v1",
-        "note": "self-report, refused by the verifier"
+        "accepted_by_verifier": false,
+        "note": "Self-reported. Present in the ledger from before the claim, and refused: attempt 1 returned ABSTAIN/EVIDENCE_UNTRUSTED with missing=[runtime] while this item was already recorded."
       },
       {
-        "source": "OBSERVED",
-        "satisfies": true,
         "kind": "runtime",
+        "source": "OBSERVED",
         "collector": "collector-http-v1",
-        "note": "signed attestation from an authenticated cross-service probe"
+        "accepted_by_verifier": true,
+        "note": "Signed by a separate process after an authenticated cross-service probe."
       }
     ],
     "cross_service_observation": {
       "collector_identity": "proofos-collector-sa (own Cloud Run identity, Google OIDC)",
-      "target": "proofos-api /health (IAM-protected)",
+      "target": "https://proofos-api-887916695462.asia-northeast3.run.app/health (IAM-protected)",
+      "target_requires_auth": true,
       "anonymous_probe": "HTTP 403 denied",
       "authenticated_probe": "HTTP 200",
       "attestation_accepted": true,
       "attestation_outcome": "HEALTHY",
-      "attestation_event_digest_sha256": "833a339bbdd1df06dd80bdbc780a7a86675a4642a003b2b2522efdb1211efc16"
+      "duplicate": false,
+      "attestation_event_content_hash": "ee1dffd8522e17d90d546e2cc7b297ad815a478f80f44fb88b139f575137df8b"
     },
     "firestore": {
-      "event_count": 29,
+      "event_count": 31,
       "chain_ok": true,
       "chain_problems": 0
     },
     "cloud_logging": {
+      "entries": 31,
       "all_required_event_types_present": true,
-      "entries": 29
+      "event_types": [
+        "AGENT_TOOL_CALLED",
+        "AGENT_TOOL_RESULT",
+        "AGENT_TURN",
+        "AGENT_TURN_COMPLETED",
+        "AGENT_TURN_STARTED",
+        "ATTESTATION_ACCEPTED",
+        "CLAIM_RECEIVED",
+        "COLLECTION_REQUESTED",
+        "COLLECTOR_RESPONSE_RECEIVED",
+        "EVIDENCE_COLLECTED",
+        "EXECUTION_COMPLETE",
+        "EXECUTION_START",
+        "RECOVERY_START",
+        "VERIFIER_DECISION"
+      ]
     },
-    "final_status": "VERIFIED"
+    "final_status": "VERIFIED",
+    "failure_class": "NONE",
+    "audit_intact": true
   },
   "iam": {
     "collector_invoker": "proofos-api-sa only",
@@ -121,19 +146,27 @@
     "negative_tests": {
       "anonymous_api_health": "HTTP 403",
       "authenticated_api_health": "HTTP 200",
-      "anonymous_collector_collect": "HTTP 403"
+      "anonymous_collector": "HTTP 404 (not publicly invokable)"
     }
   },
   "secret_leakage_check": {
-    "jwt_in_logs": false,
-    "private_key_in_logs": false,
-    "key_shaped_strings_in_logs": false,
-    "gemini_key_in_logs": false
+    "scanned": "full audit trail (20691 bytes) and Cloud Logging export (47116 bytes)",
+    "gemini_key": false,
+    "oauth_token": false,
+    "jwt": false,
+    "private_key": false,
+    "authorization_header": false
   },
   "known_limitations": [
     "Cloud Run's front end intercepts /healthz and returns HTML 404; /health is used instead.",
     "Cloud Run request timeout raised to 900s; live turns with pacing exceed the 300s default.",
-    "Gemini free tier allows 20 requests/day, which one execution largely consumes."
+    "Gemini free tier allows 20 requests/day, which one execution largely consumes.",
+    "The /executions response labels each evidence item satisfies_requirement, but that field is item.valid -- 'not tampered', not 'accepted by the verifier'. EXECUTOR-sourced evidence therefore shows true while the verifier refuses it. Reporting defect only; the gate itself is proven by the attempt-1 ABSTAIN."
   ],
-  "test_count": 442
+  "test_count": 442,
+  "prior_live_gemini_cloud_execution": {
+    "execution_id": "exec_134507744bce4546",
+    "final_status": "VERIFIED",
+    "note": "Earlier run on the same architecture. Retained for comparison; superseded by the record below."
+  }
 }
