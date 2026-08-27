@@ -241,5 +241,16 @@
       }
     ],
     "historical_audit_log": "Not rewritten. exec_11149354f8634b57 replays byte-identical before and after the fix, chain_ok=True, and no assessment field was injected into any persisted event."
+  },
+  "pending_validation": {
+    "item": "Live Gemini POST /executions on proofos-api-00010-pfd",
+    "why": "00010-pfd carries the D19 reporting fix and is serving traffic, but its live model path has not been exercised in cloud. Local coverage is 462 tests including real-HTTP service tests; that is not the same as having run it.",
+    "status": "NOT PROVEN",
+    "blocked_by": "Gemini free tier, 20 requests per day per project per model. Two full executions ran on this PT day and consumed roughly all of it.",
+    "earliest_window_pt": "2026-08-28 00:00 PDT",
+    "earliest_window_utc": "2026-08-28T07:00:00Z",
+    "plan": "Exactly one live execution against the unchanged architecture, then record it here as the proven run for 00010-pfd. Until that happens the proven run stays pinned to 00009-f2s and this entry stands.",
+    "decided_by": "user, 2026-08-27: keep 00010 deployed and validate after the quota resets.",
+    "rollback_if_needed": "gcloud run services update-traffic proofos-api --to-revisions=proofos-api-00009-f2s=100 --region=asia-northeast3"
   }
 }
