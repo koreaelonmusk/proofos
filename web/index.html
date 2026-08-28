@@ -5,9 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ProofOS Evidence Console</title>
 <meta name="description" content="Replay of two real Google Cloud executions: an agent claimed completion, and ProofOS refused it until an independent observation agreed.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -55,7 +52,7 @@
     <div class="section-head">
       <span class="label">Replay of a proven Google Cloud execution</span>
       <h2>A claim, a refusal, and what changed the answer</h2>
-      <p>Every value on this page is read from a recorded execution on Cloud Run. Nothing here contacts a model, and nothing here is simulated.</p>
+      <p>The replayed execution is real and recorded on Google Cloud. The manufacturing scenario around it is synthetic. No replay action contacts a model.</p>
     </div>
 
     <dl class="provenance" id="provenance"></dl>
@@ -199,7 +196,7 @@
         <div class="svc"><div class="svc-name">Cloud Logging</div><div class="svc-role">Execution correlation across both services.</div></div>
         <div class="svc"><div class="svc-name">Secret Manager</div><div class="svc-role">Credentials isolated per service. The collector never receives model credentials.</div></div>
         <div class="svc"><div class="svc-name">Artifact Registry</div><div class="svc-role">Pinned image digests, so a recorded run names the code that produced it.</div></div>
-        <div class="svc"><div class="svc-name">Cloud IAM</div><div class="svc-role">The collector is the only principal permitted to invoke the protected endpoint. Neither service is public.</div></div>
+        <div class="svc"><div class="svc-name">Cloud IAM</div><div class="svc-role">Anonymous access is denied. The collector service identity is explicitly authorized to invoke the protected endpoint. Neither service is publicly invokable.</div></div>
       </div>
     </div>
   </div>

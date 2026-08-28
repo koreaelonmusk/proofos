@@ -29,8 +29,14 @@
   --refused: #8b2f2f;
   --refused-bg: #f7e4e4;
 
-  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  /* No web font is loaded: the page must render identically with no network
+     at all. Plex is named first so it is used where it happens to be
+     installed, and the rest of the stack carries the same technical
+     register on every platform that lacks it. */
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Consolas,
+          "Liberation Mono", Menlo, monospace;
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system,
+          BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 
   --step: clamp(0.5rem, 0.4rem + 0.4vw, 0.75rem);
   --gutter: clamp(1.25rem, 0.6rem + 2.6vw, 3rem);

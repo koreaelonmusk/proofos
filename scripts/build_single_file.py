@@ -31,12 +31,15 @@ FORBIDDEN = [
     (re.compile(r"proofos-collector-[a-z0-9]+-[a-z]+\.a\.run\.app"), "collector url"),
 ]
 
-#: Hosts the page may reach. Google Fonts is the only one; everything else it
-#: needs is inlined. Checking hosts rather than paths matters here, because the
-#: bundle legitimately *mentions* "/executions" when describing a past defect,
-#: and a guard that cannot tell a citation from a call is one that gets switched
-#: off the first time it cries wolf.
-ALLOWED_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
+#: Hosts the page may reach: none. Fonts come from the system stack and the
+#: evidence is inlined, so a judging environment with a strict CSP, a captive
+#: portal, or no network at all renders exactly what was designed.
+#:
+#: Checking hosts rather than paths matters here, because the bundle
+#: legitimately *mentions* "/executions" when describing a past defect, and a
+#: guard that cannot tell a citation from a call is one that gets switched off
+#: the first time it cries wolf.
+ALLOWED_HOSTS = ()
 
 #: Anything that could start work rather than replay it. A judge-facing page
 #: able to reach an execution endpoint is a page able to spend quota, and it
