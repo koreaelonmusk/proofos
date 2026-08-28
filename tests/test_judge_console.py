@@ -357,3 +357,86 @@ class ClaimsTheSiteMakesTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class DocumentationMatchesEvidenceTests(unittest.TestCase):
+    """The README is a claim about the system, so it is checked like one.
+
+    A submission README drifts the moment an execution is re-run or a count
+    changes, and nothing in a normal test suite notices. These tests fail when
+    the documentation states something the committed evidence does not support
+    -- which is the standard the product applies to agents, applied to itself.
+    """
+
+    README = ROOT / "README.md"
+    SCORECARD = ROOT / "docs" / "judge-scorecard.md"
+    DEVPOST = ROOT / "docs" / "devpost-submission.md"
+
+    def setUp(self):
+        raw = self.README.read_text(encoding="utf-8")
+        # Markdown wraps prose, so a phrase can straddle a newline. Assertions
+        # about wording should not depend on where the line broke.
+        self.readme = re.sub(r"\s+", " ", raw)
+        self.raw_readme = raw
+        self.cloud = json.loads(
+            (ROOT / "artifacts" / "cloud-proof.json").read_text(encoding="utf-8")
+        )
+
+    def test_the_readme_names_the_executions_that_were_run(self):
+        for exec_id in (RECOVERY_ID, ADVERSARIAL_ID):
+            self.assertIn(exec_id, self.readme, f"README omits {exec_id}")
+
+    def test_the_readme_event_counts_match_the_journal(self):
+        recovery = self.cloud["recovery_execution_on_00010_pfd"]
+        self.assertIn(
+            f"{recovery['firestore']['event_count']} events", self.readme,
+            "README states an event count the journal does not support",
+        )
+
+    def test_the_readme_test_count_matches_the_suite(self):
+        # Counted from the suite itself rather than trusted from either file.
+        loader = unittest.TestLoader()
+        suite = loader.discover(str(ROOT / "tests"), top_level_dir=str(ROOT))
+        actual = suite.countTestCases()
+        self.assertIn(f"**{actual} tests.**", self.readme,
+                      f"README does not state the real count ({actual})")
+        self.assertEqual(self.cloud["test_count"], actual,
+                         "artifacts/cloud-proof.json states a stale test count")
+
+    def test_the_readme_names_the_revision_that_produced_the_runs(self):
+        revision = self.cloud["recovery_execution_on_00010_pfd"]["ran_on"]["api_revision"]
+        self.assertIn(revision, self.readme)
+
+    def test_the_readme_carries_no_stale_planning_language(self):
+        # "Firestore planned for the evidence ledger" outlived the Firestore
+        # deployment by weeks and would read as an unproven claim to a reviewer.
+        for phrase in ("Firestore planned", "P0 acceptance criteria", "not yet proven"):
+            self.assertNotIn(phrase, self.readme, f"README still says {phrase!r}")
+
+    def test_the_readme_makes_no_unsupported_superlative(self):
+        lowered = self.readme.lower()
+        for phrase in ("production ready", "production-ready", "state of the art",
+                       "best in class", "world's best", "fastest"):
+            self.assertNotIn(phrase, lowered, f"README claims {phrase!r}")
+
+    def test_the_readme_separates_the_three_evidence_facts(self):
+        for field in ("Integrity valid", "Accepted by verifier", "Satisfies requirement"):
+            self.assertIn(field, self.readme, f"README omits {field}")
+
+    def test_the_readme_labels_the_scenario_synthetic(self):
+        self.assertIn("Synthetic Operational Scenario", self.readme)
+        self.assertIn("connected to no real factory", self.readme)
+
+    def test_the_submission_docs_exist_and_do_not_invent_links(self):
+        for path in (self.SCORECARD, self.DEVPOST):
+            self.assertTrue(path.exists(), f"missing {path.name}")
+        devpost = self.DEVPOST.read_text(encoding="utf-8")
+        # A fabricated hosted or video URL is the one thing that would make the
+        # submission dishonest, so their absence is asserted rather than assumed.
+        self.assertIn("`TODO`", devpost, "devpost package has no TODO markers left")
+        self.assertNotRegex(devpost, r"https://(www\.)?(youtube\.com|youtu\.be|vimeo\.com)/\S+",
+                            "devpost package names a video URL that does not exist yet")
+
+    def test_every_relative_readme_link_resolves(self):
+        for target in re.findall(r"\]\((?!https?://)([^)#]+)\)", self.raw_readme):
+            self.assertTrue((ROOT / target).exists(), f"README links to missing {target}")
