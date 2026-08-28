@@ -94,6 +94,15 @@ jobs:
           "
       - name: Import Firestore journal sink
         run: python -c "from proofos.firestore_journal import FirestoreJournalSink; from google.cloud import firestore; print('firestore adapter OK', firestore.__name__)"
+      # Derived before the suite so a broken generator fails here with a clear
+      # message rather than inside a test that reads its output. The suite also
+      # builds these itself, which is what keeps a bare clone reproducible.
+      - name: Regenerate the public proof bundle from committed evidence
+        run: python scripts/build_proof_bundle.py
+      - name: Fail if the committed bundle drifted from the evidence
+        run: git diff --exit-code -- web/proof-bundle.json
+      - name: Build the self-contained judge console
+        run: python scripts/build_single_file.py
       - name: Run verification contract tests
         run: python -m unittest discover -s tests -t . -v
       - name: Build both deployable images
