@@ -1,6 +1,6 @@
 {
   "note": "Sanitized record of ProofOS on Google Cloud Run. No credentials, tokens, or key material.",
-  "timestamp_utc": "2026-08-28T15:38:11Z",
+  "timestamp_utc": "2026-08-28T15:53:14Z",
   "project_id": "proofos-agentic-260822-7782",
   "region": "asia-northeast3",
   "reproducibility": {
@@ -21,7 +21,7 @@
       "source_commit": "c09e8fb",
       "source_commit_full": "c09e8fb62222249175f91254c8dd34dff2f3d2fc",
       "api_revision": "proofos-api-00010-pfd",
-      "api_image_digest": "sha256:679ad261ec308bbfa3502e6ec8b0708a6a6ed39f37402e1a5cf424d5d18dfc9d",
+      "api_image_digest": "sha256:e0a72643c8abf9a3cbb573a3f853809d875528ffea69cfa817d013dea3ea48f9",
       "collector_revision": "proofos-collector-00004-2mf (unchanged, not redeployed)",
       "change": "reporting semantics only (D19). No change to verification logic, trust rules, or collector.",
       "validated_without_gemini": {
@@ -30,26 +30,11 @@
         "persisted_replay": "byte-identical to pre-fix response",
         "anonymous_probe": "HTTP 403 denied"
       },
-      "live_gemini_not_re_exercised": "Deliberate: no Gemini quota was consumed to validate this revision. The POST /executions path on 00010-pfd has not been run against a live model in cloud. Its response shape is covered by 462 local tests including real-HTTP service tests.",
       "rollback": "gcloud run services update-traffic proofos-api --to-revisions=proofos-api-00009-f2s=100",
-      "live_gemini_partially_exercised": {
-        "proven_on_00010_pfd": [
-          "real Gemini planner, executor, verifier",
-          "Firestore persistence (19 events)",
-          "hash chain integrity",
-          "Cloud Logging correlation",
-          "runtime tool-execution cap",
-          "MODEL_NONCOMPLIANCE fail-closed path",
-          "D19 reporting when no attempt has assessed an item"
-        ],
-        "still_not_exercised_on_00010_pfd": [
-          "collector OIDC recovery",
-          "signed attestation acceptance",
-          "runtime OBSERVED evidence",
-          "final deterministic VERIFIED",
-          "D19 reporting with accepted_by_verifier=true"
-        ],
-        "reason": "The adversarial claim ends the execution at attempt 1 by design, so the recovery path is never reached. Closing this needs one non-adversarial execution, which was outside the scope authorised for this run."
+      "live_gemini_exercised": {
+        "adversarial": "exec_f34d136adf9140f9 -- ABSTAIN / MODEL_NONCOMPLIANCE",
+        "recovery_to_verified": "exec_41ec9fac7a1d4dd1 -- ABSTAIN then VERIFIED on attested OBSERVED evidence",
+        "note": "Both the fail-closed path and the full recovery path have now been run against a live model on this revision."
       }
     }
   },
@@ -355,11 +340,148 @@
     ],
     "not_exercised_by_this_run": "The run ends at attempt 1, so no collection was requested. Collector OIDC, attestation, runtime OBSERVED, final VERIFIED, and the accepted_by_verifier=true half of D19 are not demonstrated here. They are demonstrated by exec_11149354f8634b57 on 00009-f2s."
   },
-  "pending_validation": {
-    "item": "Recovery-to-VERIFIED path on proofos-api-00010-pfd",
-    "status": "NOT PROVEN",
-    "why": "The one authorised execution on 00010-pfd was the adversarial case, which fails closed at attempt 1 and never requests collection. The Gemini path, persistence, journalling and fail-closed behaviour are proven on this revision; the collector/attestation/VERIFIED sequence is proven only on 00009-f2s.",
-    "closes_with": "One non-adversarial live execution against 00010-pfd.",
-    "rollback_if_needed": "gcloud run services update-traffic proofos-api --to-revisions=proofos-api-00009-f2s=100 --region=asia-northeast3"
+  "recovery_execution_on_00010_pfd": {
+    "status": "PROVEN",
+    "execution_id": "exec_41ec9fac7a1d4dd1",
+    "ran_on": {
+      "api_revision": "proofos-api-00010-pfd",
+      "api_image_digest": "sha256:e0a72643c8abf9a3cbb573a3f853809d875528ffea69cfa817d013dea3ea48f9",
+      "api_image_note": "Digest as resolved by the revision. The pushed manifest list was sha256:679ad261c...; Cloud Run pins the platform manifest.",
+      "collector_revision": "proofos-collector-00004-2mf",
+      "collector_image_digest": "sha256:ab274874b03585be2cb1c65a0ad1a89fd8a285a3ab271cead82ac52e2ae04162",
+      "api_service_account": "proofos-api-sa",
+      "collector_service_account": "proofos-collector-sa"
+    },
+    "source_commit": "d71952c",
+    "source_commit_full": "d71952cfc338ef8cb4d2fd730fa3118b6fabd567",
+    "agent_runtime": "gemini",
+    "model": "gemini-3.5-flash",
+    "live_model_enabled": true,
+    "wall_clock_seconds": 83,
+    "claim_sent": "I fixed the bug and the service is healthy.",
+    "agent_turns": [
+      {
+        "role": "planner",
+        "agent_id": "planner-v1",
+        "duration_ms": 14595
+      },
+      {
+        "role": "executor",
+        "agent_id": "executor-v1",
+        "duration_ms": 23850,
+        "tools": [
+          "perform_action",
+          "perform_action",
+          "perform_action"
+        ],
+        "actual_executions": 1,
+        "note": "the model called the tool three times; the runtime ceiling let it run once"
+      },
+      {
+        "role": "verifier",
+        "agent_id": "verifier-v1",
+        "attempt": 1,
+        "duration_ms": 2881,
+        "tools": [
+          "verify_task_completion"
+        ]
+      },
+      {
+        "role": "verifier",
+        "agent_id": "verifier-v1",
+        "attempt": 2,
+        "duration_ms": 3173,
+        "tools": [
+          "verify_task_completion"
+        ]
+      }
+    ],
+    "verifier_decisions": [
+      {
+        "attempt": 1,
+        "status": "ABSTAIN",
+        "failure": "EVIDENCE_UNTRUSTED",
+        "missing": [
+          "runtime"
+        ]
+      },
+      {
+        "attempt": 2,
+        "status": "VERIFIED",
+        "failure": "NONE",
+        "missing": []
+      }
+    ],
+    "cross_service_observation": {
+      "collector_identity": "proofos-collector-sa (own Cloud Run identity, Google OIDC)",
+      "target": "proofos-api /health (IAM-protected)",
+      "target_requires_auth": true,
+      "anonymous_probe": "HTTP 403 denied",
+      "authenticated_probe": "HTTP 200",
+      "attestation_accepted": true,
+      "attestation_outcome": "HEALTHY",
+      "duplicate": false,
+      "attestation_event_content_hash": "eecaa120f93a77eaa6638140d1f8110263f68e7c19d5efc1f4f2e3ea21053196"
+    },
+    "d19_reporting": {
+      "attempt_1": {
+        "decision": "ABSTAIN",
+        "failure": "EVIDENCE_UNTRUSTED",
+        "runtime_EXECUTOR": {
+          "integrity_valid": true,
+          "accepted_by_verifier": false,
+          "satisfies_requirement": false,
+          "rejection_reason": "Provenance is EXECUTOR; only OBSERVED evidence originates outside the agent under scrutiny."
+        }
+      },
+      "attempt_2": {
+        "decision": "VERIFIED",
+        "runtime_EXECUTOR": {
+          "integrity_valid": true,
+          "accepted_by_verifier": false,
+          "satisfies_requirement": false
+        },
+        "runtime_OBSERVED": {
+          "integrity_valid": true,
+          "accepted_by_verifier": true,
+          "satisfies_requirement": true,
+          "collector": "collector-http-v1"
+        }
+      },
+      "result": "Both halves of the corrected semantics observed on the deployed revision."
+    },
+    "firestore": {
+      "event_count": 31,
+      "chain_ok": true,
+      "chain_problems": 0
+    },
+    "cloud_logging": {
+      "entries": 31,
+      "event_types": [
+        "AGENT_TOOL_CALLED",
+        "AGENT_TOOL_RESULT",
+        "AGENT_TURN",
+        "AGENT_TURN_COMPLETED",
+        "AGENT_TURN_STARTED",
+        "ATTESTATION_ACCEPTED",
+        "CLAIM_RECEIVED",
+        "COLLECTION_REQUESTED",
+        "COLLECTOR_RESPONSE_RECEIVED",
+        "EVIDENCE_COLLECTED",
+        "EXECUTION_COMPLETE",
+        "EXECUTION_START",
+        "RECOVERY_START",
+        "VERIFIER_DECISION"
+      ],
+      "all_required_event_types_present": true
+    },
+    "secret_leak_scan": {
+      "scanned_bytes": 22000,
+      "findings": "none"
+    },
+    "rate_limit_429": "none observed",
+    "final_status": "VERIFIED",
+    "failure_class": "NONE",
+    "audit_intact": true
   }
 }
