@@ -55,8 +55,6 @@
       <p>The replayed execution is real and recorded on Google Cloud. The manufacturing scenario around it is synthetic. No replay action contacts a model.</p>
     </div>
 
-    <dl class="provenance" id="provenance"></dl>
-
     <div class="tabs" role="tablist" aria-label="Scenario">
       <button class="tab" role="tab" id="tab-recovery" aria-controls="console-panels" aria-selected="true" data-scenario="recovery">Verified Run</button>
       <button class="tab" role="tab" id="tab-adversarial" aria-controls="console-panels" aria-selected="false" data-scenario="adversarial">Verifier Injection Attack</button>
@@ -103,7 +101,7 @@
         </div>
       </div>
 
-      <div class="panel">
+      <div class="panel panel-inspector">
         <div class="panel-head"><span class="label">Evidence inspector</span></div>
         <div class="panel-scroll">
           <div class="panel-body">
@@ -112,6 +110,8 @@
         </div>
       </div>
     </div>
+
+    <dl class="provenance" id="provenance"></dl>
   </div>
 </section>
 

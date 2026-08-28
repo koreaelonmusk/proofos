@@ -57,14 +57,34 @@
 
   /* -- timeline ---------------------------------------------------------- */
 
+  /* The decisive events sit at sequence 19 and 29 of 31. A panel that only ever
+     shows the first ten hides the whole argument behind a nested scrollbar, so
+     the list follows the replay and keeps the current event in view. */
+  function follow(node) {
+    if (!node) return;
+    var box = node.closest ? node.closest(".panel-scroll") : null;
+    if (!box) return;
+    // scrollTop directly rather than scrollIntoView: the latter animates under
+    // scroll-behavior and can leave the panel mid-flight, which is how the
+    // final verdict ended up off-screen at rest.
+    // offsetTop is measured from .chain, which is positioned; the panel padding
+    // between it and the scroll box has to be added back.
+    var offset = node.offsetTop + (node.offsetParent ? node.offsetParent.offsetTop : 0);
+    box.scrollTop = Math.max(0, offset - box.clientHeight + node.offsetHeight + 24);
+  }
+
   function renderChain() {
     var list = $("chain");
+    var currentNode = null;
     list.innerHTML = "";
     current().events.forEach(function (ev, i) {
       var li = document.createElement("li");
       li.className = "ev " + classOf(ev);
       if (i >= state.index) li.classList.add("is-pending");
-      if (i === state.index - 1) li.classList.add("is-current");
+      if (i === state.index - 1) {
+        li.classList.add("is-current");
+        currentNode = li;
+      }
 
       var line = document.createElement("div");
       line.className = "ev-line";
@@ -90,6 +110,7 @@
       }
       list.appendChild(li);
     });
+    follow(currentNode);
     text($("progress"), state.index + " / " + current().events.length);
   }
 
