@@ -341,7 +341,7 @@ Executed and observed, not inferred:
 - Runtime action ceiling held under a live model
 - Judge console derived from those executions, byte-for-byte reproducible
 
-**511 tests.**
+**512 tests.**
 
 ## Not claimed
 
@@ -369,7 +369,7 @@ proofos_service/      deployable API, configuration, collector client
 web/                  judge console (vanilla HTML/CSS/JS, no build framework)
 artifacts/            cloud proof record and sanitized execution captures
 scripts/              proof bundle and single-file console builders
-tests/                511 tests
+tests/                512 tests
 docs/                 architecture, deployment, demo script, judge walkthrough
 .github/workflows/    CI and judge-console publishing
 ```

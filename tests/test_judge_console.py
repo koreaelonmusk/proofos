@@ -393,14 +393,40 @@ class DocumentationMatchesEvidenceTests(unittest.TestCase):
             "README states an event count the journal does not support",
         )
 
-    def test_the_readme_test_count_matches_the_suite(self):
-        # Counted from the suite itself rather than trusted from either file.
-        loader = unittest.TestLoader()
-        suite = loader.discover(str(ROOT / "tests"), top_level_dir=str(ROOT))
-        actual = suite.countTestCases()
-        self.assertIn(f"**{actual} tests.**", self.readme,
-                      f"README does not state the real count ({actual})")
-        self.assertEqual(self.cloud["test_count"], actual,
+    def test_the_readme_test_count_matches_the_recorded_count(self):
+        # README and artifact are both committed facts and must agree.
+        recorded = self.cloud["test_count"]
+        self.assertIn(f"**{recorded} tests.**", self.readme,
+                      f"README does not state the recorded count ({recorded})")
+
+    def test_the_recorded_test_count_matches_a_complete_discovery(self):
+        """And the recorded count must match reality -- where reality is knowable.
+
+        Discovery counts whatever imports. In an environment without the full
+        dependency set, unittest substitutes a _FailedTest for each module it
+        could not load, so the total is a fact about that environment rather
+        than about this repository. Asserting it anyway is how a green suite
+        starts depending on which machine ran it.
+        """
+        suite = unittest.TestLoader().discover(
+            str(ROOT / "tests"), top_level_dir=str(ROOT)
+        )
+
+        def flatten(s):
+            for item in s:
+                if isinstance(item, unittest.TestSuite):
+                    yield from flatten(item)
+                else:
+                    yield item
+
+        tests = list(flatten(suite))
+        failed_imports = [t for t in tests if type(t).__name__ == "_FailedTest"]
+        if failed_imports:
+            self.skipTest(
+                f"{len(failed_imports)} test module(s) could not be imported here, "
+                "so the discovered total does not describe this repository"
+            )
+        self.assertEqual(self.cloud["test_count"], len(tests),
                          "artifacts/cloud-proof.json states a stale test count")
 
     def test_the_readme_names_the_revision_that_produced_the_runs(self):
