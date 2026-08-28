@@ -26,6 +26,7 @@ import time
 from typing import Sequence
 
 from .api import Decision, ProofOS
+from .policy import STARTER_POLICY, PolicyError, load_policy
 from .verifier import Evidence, EvidenceSource, Requirement
 
 EXIT_VERIFIED = 0
@@ -241,6 +242,67 @@ def cmd_demo(args, out) -> int:
     return EXIT_VERIFIED if resolved.verified else EXIT_ABSTAIN
 
 
+def cmd_init(args, out) -> int:
+    """Add ProofOS to an existing project without disturbing it.
+
+    Writes one policy file and nothing else. Never overwrites: a tool that
+    silently replaces configuration is a tool nobody runs twice.
+    """
+    import pathlib
+
+    target = pathlib.Path(args.directory or ".").resolve()
+    if not target.is_dir():
+        return _usage(f"not a directory: {target}")
+
+    planned = [(target / "proofos.toml", STARTER_POLICY)]
+    existing = [path for path, _ in planned if path.exists()]
+    to_create = [path for path, _ in planned if path not in existing]
+
+    if existing:
+        for path in existing:
+            sys.stderr.write(
+                f"proofos: {path.name} already exists; leaving it alone\n"
+            )
+
+    if args.json:
+        json.dump(
+            {
+                "schema_version": 1,
+                "directory": str(target),
+                "would_create": [str(p) for p in to_create],
+                "already_present": [str(p) for p in existing],
+                "dry_run": bool(args.dry_run),
+            },
+            out,
+            indent=2,
+        )
+        out.write("\n")
+
+    if not to_create:
+        return EXIT_USAGE
+
+    if args.dry_run:
+        if not args.json:
+            out.write(f"Would create in {target}:\n")
+            for path in to_create:
+                out.write(f"  {path.name}\n")
+        return EXIT_VERIFIED
+
+    for path, content in planned:
+        if path in existing:
+            continue
+        path.write_text(content, encoding="utf-8")
+        if not args.json:
+            out.write(f"created {path.name}\n")
+
+    if not args.json:
+        out.write(
+            "\nNext:\n"
+            "  proofos verify --policy proofos.toml <evidence.json>\n"
+        )
+    return EXIT_VERIFIED
+
+
 def _load(path: str) -> dict:
     try:
         with open(path, encoding="utf-8") as handle:
@@ -263,8 +325,26 @@ def cmd_verify(args, out) -> int:
     property of the evidence record, and the kernel decides what it is worth.
     """
     data = _load(args.evidence)
+
+    policy = None
+    if args.policy:
+        try:
+            policy = load_policy(args.policy)
+        except PolicyError as exc:
+            sys.stderr.write(exc.render() + "\n")
+            return EXIT_USAGE
+        for kind in policy.unenforceable_sources:
+            # A policy may name a provenance the kernel does not trust. It is
+            # not silently honoured and it is not silently dropped -- the
+            # requirement simply can never be satisfied, and the operator is
+            # told so rather than discovering it as a permanent ABSTAIN.
+            sys.stderr.write(
+                f"proofos: requirement {kind!r} declares no provenance this build "
+                "treats as independent; it can never be satisfied\n"
+            )
+
     try:
-        requirements = [
+        requirements = list(policy.as_requirements()) if policy else [
             Requirement(r["kind"], r.get("max_age_seconds"))
             if isinstance(r, dict) else Requirement(str(r))
             for r in data["requirements"]
@@ -316,11 +396,16 @@ def build_parser() -> argparse.ArgumentParser:
         return p
 
     add("doctor", "Report what this installation can and cannot do.", cmd_doctor)
+    init = add("init", "Add a ProofOS policy to this project.", cmd_init)
+    init.add_argument("directory", nargs="?", default=".", help="project directory")
+    init.add_argument("--dry-run", action="store_true", help="show what would be created")
     add("demo", "Watch a claim get refused, then verified by independent evidence.", cmd_demo)
     add("version", "Print version information.", cmd_version)
 
     verify = add("verify", "Verify a claim against evidence from a JSON file.", cmd_verify)
     verify.add_argument("evidence", help="path to a JSON file with claim, requirements, evidence")
+    verify.add_argument("--policy", default=None,
+                        help="policy file supplying the requirements (toml/yaml/json)")
     verify.add_argument("--now", type=float, default=None,
                         help="evaluate freshness at this unix time instead of now")
     return parser

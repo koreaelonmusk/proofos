@@ -357,3 +357,118 @@ class HelpIsFastTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InitCommandTests(unittest.TestCase):
+    """Adding ProofOS to a project must never damage the project."""
+
+    def test_init_creates_one_policy_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, text = run(["init", tmp])
+            self.assertEqual(code, EXIT_VERIFIED)
+            self.assertTrue((pathlib.Path(tmp) / "proofos.toml").exists())
+            self.assertIn("created proofos.toml", text)
+
+    def test_init_never_overwrites(self):
+        # A tool that silently replaces configuration is a tool nobody runs a
+        # second time, and in this project the file it would replace is the one
+        # that says what must be proven.
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = pathlib.Path(tmp) / "proofos.toml"
+            policy.write_text("version = 1\n[requirements.mine]\n", encoding="utf-8")
+            code, _ = run(["init", tmp])
+            self.assertEqual(code, EXIT_USAGE)
+            self.assertIn("requirements.mine", policy.read_text(encoding="utf-8"))
+
+    def test_dry_run_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, text = run(["init", tmp, "--dry-run"])
+            self.assertEqual(code, EXIT_VERIFIED)
+            self.assertFalse((pathlib.Path(tmp) / "proofos.toml").exists())
+            self.assertIn("Would create", text)
+
+    def test_init_json_lists_what_it_would_do(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, text = run(["init", tmp, "--dry-run", "--json"])
+            self.assertEqual(code, EXIT_VERIFIED)
+            data = json.loads(text)
+            self.assertTrue(data["dry_run"])
+            self.assertEqual(len(data["would_create"]), 1)
+            self.assertEqual(data["already_present"], [])
+
+    def test_a_missing_directory_is_a_usage_error(self):
+        code, _ = run(["init", "definitely-not-a-directory"])
+        self.assertEqual(code, EXIT_USAGE)
+
+    def test_what_init_writes_is_immediately_usable(self):
+        # The generated policy must parse with the same loader that verify
+        # uses. A starter file that needs editing before it works is a starter
+        # file that teaches the wrong thing.
+        from proofos.policy import load_policy
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run(["init", tmp])
+            policy = load_policy(pathlib.Path(tmp) / "proofos.toml")
+            self.assertTrue(policy.requirements)
+            self.assertEqual(policy.unenforceable_sources, ())
+
+
+class PolicyDrivenVerifyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = pathlib.Path(self.tmp.name)
+        run(["init", str(self.dir)])
+        self.policy = self.dir / "proofos.toml"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def evidence(self, records):
+        path = self.dir / "evidence.json"
+        path.write_text(json.dumps({"claim": "Deployment complete.",
+                                    "evidence": records}), encoding="utf-8")
+        return path
+
+    def test_a_policy_supplies_the_requirements(self):
+        path = self.evidence([
+            {"kind": "runtime_health", "value": "agent says up", "source": "EXECUTOR",
+             "collected_at": NOW, "collector": "deploy-agent"},
+            {"kind": "tests", "value": "42 passed", "source": "OBSERVED",
+             "collected_at": NOW, "collector": "ci"},
+        ])
+        code, text = run(["verify", str(path), "--policy", str(self.policy),
+                          "--json", "--now", str(NOW + 100)])
+        self.assertEqual(code, EXIT_ABSTAIN)
+        data = json.loads(text)
+        self.assertEqual(data["missing"], ["runtime_health"])
+
+    def test_independent_evidence_for_every_requirement_verifies(self):
+        path = self.evidence([
+            {"kind": "runtime_health", "value": "probe HEALTHY", "source": "OBSERVED",
+             "collected_at": NOW, "collector": "http-collector"},
+            {"kind": "tests", "value": "42 passed", "source": "OBSERVED",
+             "collected_at": NOW, "collector": "ci"},
+        ])
+        code, _ = run(["verify", str(path), "--policy", str(self.policy),
+                       "--now", str(NOW + 100)])
+        self.assertEqual(code, EXIT_VERIFIED)
+
+    def test_the_policys_freshness_horizon_is_enforced(self):
+        path = self.evidence([
+            {"kind": "runtime_health", "value": "probe HEALTHY", "source": "OBSERVED",
+             "collected_at": NOW, "collector": "http-collector"},
+            {"kind": "tests", "value": "42 passed", "source": "OBSERVED",
+             "collected_at": NOW, "collector": "ci"},
+        ])
+        code, text = run(["verify", str(path), "--policy", str(self.policy),
+                          "--json", "--now", str(NOW + 86_400)])
+        self.assertEqual(code, EXIT_ABSTAIN)
+        self.assertEqual(json.loads(text)["reason"], "EVIDENCE_STALE")
+
+    def test_a_broken_policy_is_a_usage_error_not_a_verdict(self):
+        broken = self.dir / "broken.toml"
+        broken.write_text("version = 1\n[requirements.runtime_health]\n"
+                          "max_age_second = 300\n", encoding="utf-8")
+        path = self.evidence([])
+        code, _ = run(["verify", str(path), "--policy", str(broken)])
+        self.assertEqual(code, EXIT_USAGE)
