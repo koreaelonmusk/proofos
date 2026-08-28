@@ -71,6 +71,12 @@ def main() -> int:
                 "records a real OS-process restart: the resuming interpreter "
                 "receives only the checkpoint and the journal, and never sees "
                 "the process that opened the operation.",
+        "reproducibility": "Regenerating this file produces different journal "
+                           "hashes and a different source commit, because it "
+                           "records a run and a run has timestamps and event "
+                           "ids. What is reproducible is the property: the "
+                           "script refuses to write anything unless the "
+                           "cross-process restart test passes.",
         "operation_id": OPERATION,
         "task_id": TASK,
         "execution_id": journal.execution_id,
