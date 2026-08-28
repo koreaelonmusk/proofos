@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verifier:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile Python
+        run: python -m compileall -q proofos proofos_agent proofos_service proofos_collector
+      # compileall does not import, so it cannot prove the ADK wiring works.
+      # Import the agent explicitly to catch API drift in google-adk.
+      - name: Build role-scoped ADK agents
+        run: |
+          python -c "
+          from proofos.ledger import EvidenceLedger
+          from proofos_agent.agent import build_verifier_agent, build_planner_agent
+          v = build_verifier_agent(EvidenceLedger())
+          p = build_planner_agent()
+          print(v.name, v.model, [t.__name__ for t in v.tools])
+          print(p.name, p.model, list(p.tools))
+          "
+      - name: Validate the agent registry
+        run: |
+          python -c "
+          from proofos.registry import default_registry
+          r = default_registry()
+          assert r.sealed
+          for rec in r.records():
+              print(rec.agent_id, rec.role, sorted(rec.capabilities), list(rec.tools))
+          "
+      - name: Provision a collector identity
+        run: |
+          python -m proofos_collector.keygen             --private "$RUNNER_TEMP/collector.pem"             --public  "$RUNNER_TEMP/collector.pub"
+      - name: Import service app in remote (attested) mode
+        env:
+          PROOFOS_COLLECTOR_MODE: remote
+          PROOFOS_COLLECTOR_URL: http://collector:8080
+          PROOFOS_COLLECTOR_AUTH: none
+        run: |
+          export PROOFOS_COLLECTOR_PUBLIC_KEY_FILE="$RUNNER_TEMP/collector.pub"
+          python -c "
+          from proofos_service.app import app, CONFIG
+          print(app.title, len(app.routes), 'routes')
+          print('config:', CONFIG.describe())
+          assert CONFIG.is_remote, 'the deployable service must default to attested evidence'
+          "
+      - name: Agent runtime defaults to deterministic
+        run: |
+          python -c "
+          from proofos_service.config import build_runtime_config, AgentRuntime
+          c = build_runtime_config({'PROOFOS_COLLECTOR_MODE': 'inprocess-test-only'})
+          print('runtime:', c.describe())
+          assert c.agent_runtime is AgentRuntime.DETERMINISTIC
+          assert not c.describe()['live_model_enabled']
+          "
+      - name: Live Gemini mode refuses to start without credentials
+        run: |
+          python -c "
+          from proofos_service.config import build_runtime_config, ConfigurationError
+          try:
+              build_runtime_config({
+                  'PROOFOS_COLLECTOR_MODE': 'inprocess-test-only',
+                  'PROOFOS_AGENT_RUNTIME': 'gemini',
+              })
+          except ConfigurationError as exc:
+              print('refused as expected:', str(exc)[:80]); raise SystemExit(0)
+          raise SystemExit('live mode started without credentials, or fell back silently')
+          "
+      - name: Refuse to start unconfigured
+        run: |
+          python -c "
+          from proofos_service.config import build_runtime_config, ConfigurationError
+          try:
+              build_runtime_config({})
+          except ConfigurationError as exc:
+              print('refused as expected:', str(exc).split('.')[0]); raise SystemExit(0)
+          raise SystemExit('the service started without knowing which collector to trust')
+          "
+      - name: Import collector service
+        run: |
+          python -c "
+          from proofos_collector.app import app, SIGNER, PROFILES
+          print(app.title, [p.profile_id for p in PROFILES.profiles()])
+          print('signing key present in collector:', bool(SIGNER.public_key_b64()))
+          "
+      - name: Import Firestore journal sink
+        run: python -c "from proofos.firestore_journal import FirestoreJournalSink; from google.cloud import firestore; print('firestore adapter OK', firestore.__name__)"
+      # Derived before the suite so a broken generator fails here with a clear
+      # message rather than inside a test that reads its output. The suite also
+      # builds these itself, which is what keeps a bare clone reproducible.
+      - name: Regenerate the public proof bundle from committed evidence
+        run: python scripts/build_proof_bundle.py
+      - name: Fail if the committed bundle drifted from the evidence
+        run: git diff --exit-code -- web/proof-bundle.json
+      - name: Build the self-contained judge console
+        run: python scripts/build_single_file.py
+      - name: Run verification contract tests
+        run: python -m unittest discover -s tests -t . -v
+      - name: Build both deployable images
+        run: |
+          docker build -q -t proofos-api:ci -f Dockerfile .
+          docker build -q -t proofos-collector:ci -f Dockerfile.collector .
+          echo "api image:       $(docker images -q proofos-api:ci)"
+          echo "collector image: $(docker images -q proofos-collector:ci)"
+      - name: The API image must ship no collector key material
+        run: |
+          docker run --rm --entrypoint sh proofos-api:ci -c '
+            if [ -d /app/proofos_collector ]; then
+              echo "API image ships the collector package"; exit 1
+            fi
+            found=0
+            for f in $(grep -rl "BEGIN PRIVATE KEY" /run /app /etc /home 2>/dev/null); do
+              if head -c 27 "$f" | grep -q -- "-----BEGIN PRIVATE KEY"; then
+                echo "API image contains key material: $f"; found=1
+              fi
+            done
+            if [ "$found" -ne 0 ]; then exit 1; fi
+            echo "no collector package, no PEM key material"
+          '

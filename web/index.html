@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProofOS Evidence Console</title>
+<meta name="description" content="Replay of two real Google Cloud executions: an agent claimed completion, and ProofOS refused it until an independent observation agreed.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <span class="brand"><span class="brand-mark" aria-hidden="true"></span>ProofOS</span>
+    <div class="nav-links">
+      <a href="#console">Verified Run</a>
+      <a href="#attack">Attack Test</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#evidence">Evidence</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="eyebrow"><span class="label">Evidence-First Autonomous Operations</span></div>
+      <h1>AI agents execute.<br>ProofOS proves.</h1>
+      <p class="thesis">An agent reporting that a task is complete is <strong>not evidence</strong> that the task was completed. ProofOS accepts completion only when something other than the agent says so.</p>
+      <p class="tagline">VERIFIED or ABSTAIN. Fail closed by default.</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#console" data-action="replay">Replay Verified Run</a>
+        <a class="btn btn-ghost" href="#attack">See the injection attack</a>
+      </div>
+    </div>
+
+    <div class="verdict-card">
+      <div class="verdict-row">
+        <span class="label">The executor reported</span>
+        <p class="verdict-said" id="hero-claim">&nbsp;</p>
+        <div class="verdict-arrow" aria-hidden="true">&#8595;</div>
+        <span class="label">ProofOS returned</span>
+        <p class="verdict-out">ABSTAIN</p>
+      </div>
+      <p class="verdict-why">Not because evidence was missing. The executor's own runtime evidence was already recorded. It was refused for <strong>where it came from</strong>.</p>
+    </div>
+  </div>
+</header>
+
+<section id="console">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="label">Replay of a proven Google Cloud execution</span>
+      <h2>A claim, a refusal, and what changed the answer</h2>
+      <p>The replayed execution is real and recorded on Google Cloud. The manufacturing scenario around it is synthetic. No replay action contacts a model.</p>
+    </div>
+
+    <div class="tabs" role="tablist" aria-label="Scenario">
+      <button class="tab" role="tab" id="tab-recovery" aria-controls="console-panels" aria-selected="true" data-scenario="recovery">Verified Run</button>
+      <button class="tab" role="tab" id="tab-adversarial" aria-controls="console-panels" aria-selected="false" data-scenario="adversarial">Verifier Injection Attack</button>
+    </div>
+
+    <div class="panel" style="margin-bottom:1.25rem">
+      <div class="panel-head">
+        <span class="badge badge-synthetic">Synthetic Operational Scenario</span>
+        <span class="label">Line A Quality Deviation</span>
+      </div>
+      <div class="panel-body">
+        <p style="font-size:0.9375rem;color:var(--ink-2);max-width:75ch">Investigate the deviation, apply the approved remediation, and close the incident only when independent evidence confirms recovery. The narrative is illustrative and connected to no real factory; the execution beneath it is real.</p>
+        <div style="margin-top:1rem;display:grid;gap:0.35rem">
+          <span class="label">Recorded task and claim</span>
+          <p class="mono" style="font-size:0.8125rem;color:var(--ink)" id="scenario-task">&nbsp;</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="console" id="console-panels" role="tabpanel" aria-labelledby="tab-recovery">
+      <div class="panel">
+        <div class="panel-head">
+          <span class="label">Hash-chained event trail</span>
+          <span class="badge badge-replay" id="mode-badge">Replay</span>
+        </div>
+        <div class="panel-scroll">
+          <div class="panel-body">
+            <ol class="chain" id="chain"></ol>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel panel-decision">
+        <div class="panel-head"><span class="label">Current trust decision</span></div>
+        <div class="decision is-claimed" id="decision">
+          <div class="decision-state" id="decision-state">&mdash;</div>
+          <div class="decision-sub" id="decision-sub">awaiting replay</div>
+          <p class="decision-note" id="decision-note">Press Replay to step through the recorded execution.</p>
+        </div>
+        <div class="transport">
+          <button class="btn btn-primary" id="btn-play" type="button">Replay</button>
+          <button class="btn btn-ghost" id="btn-end" type="button">Skip to end</button>
+          <span class="label" id="progress">0 / 0</span>
+        </div>
+      </div>
+
+      <div class="panel panel-inspector">
+        <div class="panel-head"><span class="label">Evidence inspector</span></div>
+        <div class="panel-scroll">
+          <div class="panel-body">
+            <div class="evidence" id="evidence"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <dl class="provenance" id="provenance"></dl>
+  </div>
+</section>
+
+<section id="attack">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="label">Adversarial live case</span>
+      <h2>The injection compromised the model. It did not compromise the system.</h2>
+      <p>A completion claim is attacker-controlled text, and it reaches the verifier agent. This one told the verifier to skip its tools and return a verdict.</p>
+    </div>
+
+    <blockquote class="quote" id="attack-claim">&nbsp;</blockquote>
+
+    <div class="attack-grid" style="margin-top:2rem">
+      <div class="split">
+        <div>
+          <h3>Model behaviour</h3>
+          <p>The verifier agent obeyed the injected instruction. It then wrote prose asserting the verification tool had returned a status &mdash; a result it never obtained.</p>
+          <p class="big bad" id="attack-toolcalls">&nbsp;</p>
+          <p class="label">verify_task_completion calls</p>
+        </div>
+        <div>
+          <h3>System behaviour</h3>
+          <p>ProofOS looked for an authoritative tool result, found none, and refused to derive a verdict from prose.</p>
+          <p class="big good" id="attack-final">&nbsp;</p>
+          <p class="label" id="attack-failure">&nbsp;</p>
+        </div>
+      </div>
+
+      <div>
+        <span class="label">What the runtime did, in order</span>
+        <ol class="attack-flow">
+          <li><span class="n">01</span> Claim carries an instruction to the verifier</li>
+          <li><span class="n">02</span> Verifier model follows the malicious instruction</li>
+          <li><span class="n">03</span> Verification tool calls: 0</li>
+          <li><span class="n">04</span> Model prose asserts an unsupported result</li>
+          <li><span class="n">05</span> Runtime finds no authoritative tool result</li>
+          <li class="terminal"><span class="n">06</span> ABSTAIN &middot; MODEL_NONCOMPLIANCE</li>
+        </ol>
+        <div class="maxim">
+          <p>Model compliance is not a security boundary.</p>
+          <p>Authority lives in deterministic verification.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="label">Google Cloud trust architecture</span>
+      <h2>Two services, two identities, one of which cannot certify its own work</h2>
+      <p>The separation is not a convention inside one process. The component that observes runs somewhere else, under a different identity, holding a signing key the API does not have.</p>
+    </div>
+
+    <div class="arch">
+      <div class="arch-flow">
+        <div class="node">
+          <div class="node-title">Gemini 3.5 Flash</div>
+          <div class="node-meta">planner &middot; executor &middot; verifier, via Google ADK</div>
+        </div>
+        <div class="connector">invokes tools</div>
+        <div class="node identity">
+          <div class="node-title">ProofOS API &mdash; Cloud Run</div>
+          <div class="node-meta" id="arch-api">&nbsp;</div>
+        </div>
+        <div class="connector">requests collection &middot; Google OIDC &middot; IAM</div>
+        <div class="node identity">
+          <div class="node-title">Private Collector &mdash; Cloud Run</div>
+          <div class="node-meta" id="arch-collector">&nbsp;</div>
+        </div>
+        <div class="connector">probes the protected endpoint, then signs what it saw</div>
+        <div class="node attest">
+          <div class="node-title">Ed25519 attestation &rarr; OBSERVED evidence</div>
+          <div class="node-meta" id="arch-observe">&nbsp;</div>
+        </div>
+      </div>
+
+      <div class="services">
+        <div class="svc"><div class="svc-name">Firestore</div><div class="svc-role">Durable hash-chained journal. Every decision is reconstructable without trusting an agent's summary.</div></div>
+        <div class="svc"><div class="svc-name">Cloud Logging</div><div class="svc-role">Execution correlation across both services.</div></div>
+        <div class="svc"><div class="svc-name">Secret Manager</div><div class="svc-role">Credentials isolated per service. The collector never receives model credentials.</div></div>
+        <div class="svc"><div class="svc-name">Artifact Registry</div><div class="svc-role">Pinned image digests, so a recorded run names the code that produced it.</div></div>
+        <div class="svc"><div class="svc-name">Cloud IAM</div><div class="svc-role">Anonymous access is denied. The collector service identity is explicitly authorized to invoke the protected endpoint. Neither service is publicly invokable.</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="evidence">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="label">What is proven, and what is not</span>
+      <h2>Boundaries stated in the same place as the claims</h2>
+      <p>A system built on refusing unsupported claims does not get to make unsupported claims about itself.</p>
+    </div>
+    <div class="bounds" id="bounds"></div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>ProofOS &middot; Evidence-First Autonomous Operations</span>
+    <span class="mono" id="footer-meta">&nbsp;</span>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

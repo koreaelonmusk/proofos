@@ -1,0 +1,59 @@
+name: Judge console
+
+# Publishes the read-only judge console. The site is static and carries its
+# evidence with it, so what ships cannot reach a model, spend quota, or start an
+# execution -- it keeps working through an outage, a cold start, and a hundred
+# refreshes on a judging laptop.
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", "artifacts/**", "scripts/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The bundle is derived from committed evidence. Rebuilding here means a
+      # page that disagrees with its own executions never reaches the web.
+      - name: Rebuild the proof bundle from committed evidence
+        run: python scripts/build_proof_bundle.py
+
+      - name: Fail if the committed bundle drifted from the evidence
+        run: git diff --exit-code -- web/proof-bundle.json
+
+      - name: Build the self-contained page
+        run: python scripts/build_single_file.py
+
+      - name: Check the console cannot start work or leak secrets
+        run: python -m unittest tests.test_judge_console -v
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

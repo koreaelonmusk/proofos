@@ -1,0 +1,24 @@
+# Cloud Run container for the ProofOS collector.
+#
+# Deployed as its own service with its own identity, so the observation
+# authority is a separate principal rather than a Python object.
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN python -m pip install --no-cache-dir -r requirements.txt
+
+COPY proofos/ ./proofos/
+COPY proofos_collector/ ./proofos_collector/
+
+RUN useradd --create-home --uid 1000 proofos && chown -R proofos:proofos /app
+USER proofos
+
+ENV PORT=8080
+EXPOSE 8080
+
+CMD ["sh", "-c", "exec uvicorn proofos_collector.app:app --host 0.0.0.0 --port ${PORT}"]

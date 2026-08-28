@@ -1,0 +1,49 @@
+# The deployable ProofOS topology, two containers.
+#
+# Run once to provision the collector identity:
+#   python -m proofos_collector.keygen --private secrets/collector.pem \
+#                                      --public  secrets/collector.pub
+# then:  docker compose up --build
+#
+# The API is given the collector's URL and public key. It is never given the
+# private key, and there is no volume through which it could read one.
+services:
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    environment:
+      PORT: "8080"
+      PROOFOS_COLLECTOR_ID: collector-http-v1
+      PROOFOS_COLLECTOR_PRIVATE_KEY_FILE: /run/secrets/collector.pem
+      # The collector observes the API service across the container network,
+      # so the evidence comes from a genuine cross-container hop.
+      PROOFOS_COLLECTOR_TARGET: http://api:8080/healthz
+      PROOFOS_COLLECTOR_TIMEOUT: "5"
+    volumes:
+      - ./secrets/collector.pem:/run/secrets/collector.pem:ro
+    expose:
+      - "8080"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      PORT: "8080"
+      PROOFOS_COLLECTOR_MODE: remote
+      PROOFOS_COLLECTOR_URL: http://collector:8080
+      PROOFOS_COLLECTOR_ID: collector-http-v1
+      # Said explicitly, not inferred: on a private container network the
+      # boundary is network reachability, and there is no Google identity
+      # to obtain. The attestation signature is checked either way -- this
+      # governs who may call the collector, not what it can be made to say.
+      PROOFOS_COLLECTOR_AUTH: none
+      # Public half only. There is deliberately no path to the private key.
+      PROOFOS_COLLECTOR_PUBLIC_KEY_FILE: /run/config/collector.pub
+    volumes:
+      - ./secrets/collector.pub:/run/config/collector.pub:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      - collector
