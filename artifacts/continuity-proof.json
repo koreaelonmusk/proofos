@@ -1,0 +1,34 @@
+{
+  "kind": "DETERMINISTIC RESTART PROOF",
+  "note": "Not a Google Cloud execution. No model call, no network. This records a real OS-process restart: the resuming interpreter receives only the checkpoint and the journal, and never sees the process that opened the operation.",
+  "operation_id": "op_line_a_deviation",
+  "task_id": "LINE-A-QD-1184",
+  "execution_id": "exec_continuity_day0",
+  "days_elapsed": 21,
+  "initial_phase": "AWAITING_INDEPENDENT_EVIDENCE",
+  "resumed_phase": "AWAITING_INDEPENDENT_EVIDENCE",
+  "action_executions_before": 1,
+  "action_executions_after": 1,
+  "next_step_after_resume": "COLLECT",
+  "agent_versions": {
+    "planner-v1": "v1",
+    "executor-v1": "v1",
+    "collector-http-v1": "v1",
+    "verifier-v1": "v1"
+  },
+  "journal_binding": {
+    "events": 5,
+    "last_sequence": 4,
+    "last_hash": "30a30d81119224bc0ee5105a8fff1cd5b298a938223920d02161403d31fffb94",
+    "policy_digest": "db2fa2d914d27d6eb4b7201c0f31e53358936174e42937d619dcfa10f226bf76"
+  },
+  "restored_evidence_is_not_restored_proof": {
+    "stale_observation_at_day_21": "ABSTAIN / EVIDENCE_STALE",
+    "fresh_observation_at_day_21": "VERIFIED",
+    "executor_self_report_at_day_21": "still refused"
+  },
+  "final_decision": "VERIFIED only after a fresh independent observation",
+  "verified_by": "tests/test_fleet_continuity.py",
+  "source_commit": "f8c5365",
+  "source_commit_full": "f8c53650acf8a1ee941076755657ea3731ce781f"
+}

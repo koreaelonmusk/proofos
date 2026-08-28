@@ -28,6 +28,8 @@ there is no evidence, the row says so.
 | Secure scoped tools | Agent build refuses a tool the registry does not permit; runtime action ceiling held 3 calls → 1 execution | **PROVEN** |
 | Durable state | Firestore hash-chained journal, 31 events, `chain_ok=true` | **PROVEN** |
 | Failure tolerance | Eleven named failure classes, all fail closed; `tests/test_adversarial.py`, `test_recovery.py` | **PROVEN** |
+| Long-horizon context | Durable checkpoint, real process restart at day 21, action not repeated | `artifacts/continuity-proof.json` | **PROVEN DETERMINISTICALLY** |
+| Agent discovery / versioning | First-party Agent Cards; pinned versions refuse silent upgrade | `proofos/agent_catalog.py` | **PROVEN** |
 | Signed evidence transport | Ed25519 over eleven re-canonicalized fields; forgery, replay, staleness all rejected | **PROVEN** |
 
 ## Demo & Production Readiness — 30%
@@ -52,7 +54,7 @@ standard ProofOS applies to agents.
 
 | | Status |
 |---|---|
-| Long-term Memory Bank | **NOT CLAIMED** |
+| Google Memory Bank product | **NOT CLAIMED** |
 | Enterprise Agent Gateway | **NOT CLAIMED** — the IAM-gated boundary is analogous, not a gateway product |
 | Model Armor | **NOT CLAIMED** |
 | Vertex AI in the authoritative runs | **NOT CLAIMED** — configuration path exists; the recorded runs used the Gemini API |
