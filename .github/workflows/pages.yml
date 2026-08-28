@@ -29,6 +29,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Without the full dependency set, unittest reports import failures as
+      # tests and the suite silently describes the runner instead of the code.
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
       # The bundle is derived from committed evidence. Rebuilding here means a
       # page that disagrees with its own executions never reaches the web.
       - name: Rebuild the proof bundle from committed evidence
