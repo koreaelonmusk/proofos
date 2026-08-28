@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proofos"
+version = "0.1.0"
+description = "Evidence-first verification for autonomous agents. An agent claim is not proof."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+keywords = ["agents", "verification", "evidence", "audit", "ai-safety"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Security",
+]
+
+# The deterministic core deliberately depends on nothing. Verification,
+# replay, the journal and the demo all run offline, on a stock interpreter,
+# with no account and no key. Everything that needs a network or a cloud SDK
+# is an extra, so a developer who wants to understand ProofOS is not made to
+# install a model runtime first.
+dependencies = []
+
+[project.optional-dependencies]
+# Signed observation. Separated because a reader who only wants to see how
+# verification refuses a self-report does not need a crypto stack.
+attestation = ["cryptography>=42,<51"]
+# The Google agent runtime and cloud journal, as one deployment option.
+google = [
+    "google-adk>=2.7,<3",
+    "google-cloud-firestore>=2.20,<3",
+    "cryptography>=42,<51",
+]
+# The deployable HTTP surface.
+service = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "cryptography>=42,<51",
+]
+dev = [
+    "google-adk>=2.7,<3",
+    "google-cloud-firestore>=2.20,<3",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "cryptography>=42,<51",
+    "pyyaml>=6,<7",
+    "build>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/koreaelonmusk/proofos"
+Console = "https://koreaelonmusk.github.io/proofos/"
+Source = "https://github.com/koreaelonmusk/proofos"
+
+[project.scripts]
+proofos = "proofos.cli:main"
+
+[tool.setuptools]
+# Named explicitly rather than auto-discovered: the repository also contains
+# tests, scripts and a web console, and a wheel should carry none of them.
+packages = [
+    "proofos",
+    "proofos_agent",
+    "proofos_collector",
+    "proofos_service",
+]
+
+[tool.setuptools.package-data]
+proofos = ["py.typed"]

@@ -221,3 +221,8 @@ __marimo__/
 secrets/
 *.pem
 *.key
+
+# Packaging output
+dist/
+build/
+*.egg-info/
