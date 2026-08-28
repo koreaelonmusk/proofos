@@ -1,0 +1,35 @@
+{
+  "kind": "DETERMINISTIC RESTART PROOF",
+  "note": "Not a Google Cloud execution. No model call, no network. This records a real OS-process restart: the resuming interpreter receives only the checkpoint and the journal, and never sees the process that opened the operation.",
+  "reproducibility": "Regenerating this file produces different journal hashes and a different source commit, because it records a run and a run has timestamps and event ids. What is reproducible is the property: the script refuses to write anything unless the cross-process restart test passes.",
+  "operation_id": "op_line_a_deviation",
+  "task_id": "LINE-A-QD-1184",
+  "execution_id": "exec_continuity_day0",
+  "days_elapsed": 21,
+  "initial_phase": "AWAITING_INDEPENDENT_EVIDENCE",
+  "resumed_phase": "AWAITING_INDEPENDENT_EVIDENCE",
+  "action_executions_before": 1,
+  "action_executions_after": 1,
+  "next_step_after_resume": "COLLECT",
+  "agent_versions": {
+    "planner-v1": "v1",
+    "executor-v1": "v1",
+    "collector-http-v1": "v1",
+    "verifier-v1": "v1"
+  },
+  "journal_binding": {
+    "events": 5,
+    "last_sequence": 4,
+    "last_hash": "dd41c9b82f02f38c755efa75284f7b1f8d1fd7c1ba3fe789a60570cd24c12f15",
+    "policy_digest": "db2fa2d914d27d6eb4b7201c0f31e53358936174e42937d619dcfa10f226bf76"
+  },
+  "restored_evidence_is_not_restored_proof": {
+    "stale_observation_at_day_21": "ABSTAIN / EVIDENCE_STALE",
+    "fresh_observation_at_day_21": "VERIFIED",
+    "executor_self_report_at_day_21": "still refused"
+  },
+  "final_decision": "VERIFIED only after a fresh independent observation",
+  "verified_by": "tests/test_fleet_continuity.py",
+  "source_commit": "1d7fcd3",
+  "source_commit_full": "1d7fcd38b288ca2829118f726b0760dfe3d6a7f0"
+}

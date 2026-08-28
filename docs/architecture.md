@@ -45,6 +45,40 @@ flowchart TB
     O --> CL["Cloud Logging"]
 ```
 
+## Continuity, kept away from authority
+
+```mermaid
+flowchart LR
+    C["Agent Catalog<br/>owner · purpose · lifecycle · scopes"]
+    R["Sealed Agent Registry<br/><b>security authority</b>"]
+    K["Operation Checkpoint<br/>phase · pinned versions · journal position"]
+    S["Resume Kernel"]
+    O["Orchestrator"]
+    V["Verification kernel"]
+    D["VERIFIED or ABSTAIN"]
+
+    C -. "discovery only<br/>validated against" .-> R
+    K -. "continuity only" .-> S
+    S -- "one allowed next step" --> O
+    O --> V
+    V --> D
+
+    C -.-x D
+    K -.-x D
+```
+
+Neither the catalog nor the checkpoint has a path to a verdict, and the dashed
+crossed edges are the point of the diagram. A card is validated against its
+registry record at build time, so catalog metadata cannot grant a capability the
+registry withheld. A checkpoint has no field that could hold a decision,
+evidence content, or a capability -- there is nothing in it a forgery would buy.
+
+The resume kernel is a railway switch. Given a checkpoint it reports exactly one
+permitted next step, and an operation whose journal records `ACTION_EXECUTED`
+can never be switched back onto the execution track, whatever its checkpoint
+says. The journal is the authority on what happened; the checkpoint only says
+where to look.
+
 ## Trust boundaries
 
 ### 1. The executor cannot write evidence that counts

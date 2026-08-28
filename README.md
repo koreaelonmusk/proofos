@@ -103,6 +103,42 @@ Model compliance is not a security boundary. Deterministic authority is.
 
 ---
 
+## The third proof: 21 days and a process restart
+
+**Deterministic restart proof, not a cloud execution.** No model call, no
+network. Recorded in [`artifacts/continuity-proof.json`](artifacts/continuity-proof.json).
+
+An incident can sit waiting for evidence long after the process that opened it
+has gone. ProofOS stores where an operation got to — phase, pinned agent
+versions, requirements, evidence digests, journal position — and nothing else.
+
+```
+DAY 0    remediation applied  ×1
+         ABSTAIN, waiting for independent evidence
+         checkpoint written
+
+         ── process terminated ──
+
+DAY 21   a second interpreter, handed only the checkpoint and the journal
+         operation restored · agent versions pinned · next step = COLLECT
+         remediation applied  ×1        ← unchanged
+```
+
+Two properties matter more than the restore itself.
+
+**The process restarted. The action did not.** The proof that the remediation
+already ran is not read from the checkpoint — it is read from the hash-chained
+journal, where `ACTION_EXECUTED` was written when it happened. A checkpoint
+edited back to `PLANNED` is refused, because the journal disagrees.
+
+**Restoring an operation does not restore its proof.** The day-zero observation
+is still three weeks old, so it is refused as `EVIDENCE_STALE`. Verification
+resumes only when a *fresh* independent observation arrives. Continuity carries
+position, never authority: `OperationCheckpoint` has no field for a verdict, no
+field for evidence content, and no field for capabilities.
+
+---
+
 ## Integrity is not trust is not satisfaction
 
 Three questions that most systems collapse into one:
@@ -204,7 +240,9 @@ the Gemini API, so it is not claimed here.
 | Failure tolerance | Fail-closed on missing, stale, tampered, untrusted, or unavailable evidence — and on a lost audit trail | `tests/test_adversarial.py`, `tests/test_recovery.py` | **PROVEN** |
 | Prompt-injection containment | A missing authoritative tool result fails closed | `exec_f34d136adf9140f9` | **PROVEN** |
 | Observability | Correlated Cloud Logging plus a verifiable hash chain | 31 log entries, `chain_ok=true` | **PROVEN** |
-| Long-term Memory Bank | — | — | **NOT CLAIMED** |
+| Agent discovery and versioning | First-party Agent Cards over the sealed registry; owner, purpose, tool scope, data scope, lifecycle | `proofos/agent_catalog.py`, `tests/test_fleet_continuity.py` | **PROVEN** |
+| Long-horizon operation context | Durable checkpoint + resume across a real process restart, 21 days later, without repeating the action | `artifacts/continuity-proof.json` | **PROVEN DETERMINISTICALLY** |
+| Long-term Memory Bank (Google product) | — | — | **NOT CLAIMED** |
 | Enterprise Agent Gateway | Analogous boundary only (IAM-gated service-to-service), not a gateway product | — | **NOT CLAIMED** |
 | Model Armor | — | — | **NOT CLAIMED** |
 
@@ -341,14 +379,15 @@ Executed and observed, not inferred:
 - Runtime action ceiling held under a live model
 - Judge console derived from those executions, byte-for-byte reproducible
 
-**512 tests.**
+**553 tests.**
 
 ## Not claimed
 
 - Production readiness, SLA, or availability guarantee
 - Load, scale, or latency benchmarks; no comparative claim of any kind
 - Enterprise-wide production deployment
-- Long-term Memory Bank, Agent Gateway, or Model Armor integration
+- Google Memory Bank, Agent Gateway, or Model Armor products
+- Continuity proven on Google Cloud; the restart proof is deterministic and local
 - Any integration with real industrial equipment
 - Vertex AI in the authoritative runs
 
@@ -362,14 +401,15 @@ That is one reason the judge console replays rather than runs.
 
 ```
 proofos/              verification kernel, ledger, capabilities, registry,
-                      journal, attestation, ingestion, probe
+                      journal, attestation, ingestion, probe,
+                      agent catalog, continuity, resume
 proofos_agent/        ADK agents, fleet, orchestration, turn runners
 proofos_collector/    private collector service and its signing identity
 proofos_service/      deployable API, configuration, collector client
 web/                  judge console (vanilla HTML/CSS/JS, no build framework)
-artifacts/            cloud proof record and sanitized execution captures
-scripts/              proof bundle and single-file console builders
-tests/                512 tests
+artifacts/            cloud proof, restart proof, sanitized execution captures
+scripts/              proof bundle, single-file console, continuity proof
+tests/                553 tests
 docs/                 architecture, deployment, demo script, judge walkthrough
 .github/workflows/    CI and judge-console publishing
 ```

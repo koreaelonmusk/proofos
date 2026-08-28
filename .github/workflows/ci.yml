@@ -103,6 +103,13 @@ jobs:
         run: git diff --exit-code -- web/proof-bundle.json
       - name: Build the self-contained judge console
         run: python scripts/build_single_file.py
+      # Runs the cross-process restart and refuses to emit the artifact if the
+      # property does not hold. Deliberately not byte-gated like the proof
+      # bundle: this artifact records a run, and a run has timestamps and event
+      # ids. The invariant worth enforcing is that the property still holds
+      # when regenerated, not that two runs produce identical bytes.
+      - name: Regenerate the deterministic restart proof
+        run: python scripts/build_continuity_proof.py
       - name: Run verification contract tests
         run: python -m unittest discover -s tests -t . -v
       - name: Build both deployable images
