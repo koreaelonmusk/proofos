@@ -10,7 +10,7 @@
   },
   "project": {
     "region": "asia-northeast3",
-    "test_count": 863,
+    "test_count": 876,
     "known_limitations": [
       "Cloud Run's front end intercepts /healthz and returns HTML 404; /health is used instead.",
       "Cloud Run request timeout raised to 900s; live turns with pacing exceed the 300s default.",
