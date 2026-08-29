@@ -16,6 +16,7 @@ through the façade or the CLI, to make a self-report satisfy a requirement.
 
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import subprocess
@@ -25,7 +26,16 @@ import time
 import unittest
 import pathlib
 
-from proofos import Decision, Evidence, EvidenceSource, ProofOS, Requirement
+from proofos import (
+    Decision,
+    Evidence,
+    EvidenceLedger,
+    EvidenceSource,
+    ProofOS,
+    Requirement,
+)
+from proofos.api import ProvenanceNotDeclarable
+from proofos.capabilities import ObservationCapability
 from proofos.cli import (
     EXIT_ABSTAIN,
     EXIT_OPERATIONAL,
@@ -45,9 +55,36 @@ def executor_evidence(kind="runtime_health", at=NOW):
 
 
 def observed_evidence(kind="runtime_health", at=NOW):
+    """OBSERVED evidence, constructed directly.
+
+    Kept because several tests need to prove that constructing one of these and
+    handing it to the façade is refused. It is not how an observation reaches a
+    verdict; ``recorded`` below is.
+    """
     return Evidence(kind=kind, value="probe HEALTHY",
                     source=EvidenceSource.OBSERVED, collected_at=at,
                     collector="http-health-collector")
+
+
+def recorded(*, requirements, self_report=True, observation_at=NOW,
+             kind="runtime_health", task="T-1"):
+    """A ledger holding evidence the way the runtime produces it.
+
+    The self-report goes in directly, because saying "I did it" needs no
+    authority. The observation goes through a capability, because writing
+    OBSERVED does. That asymmetry is the product, so the tests build it rather
+    than labelling two records differently.
+    """
+    ledger = EvidenceLedger()
+    ledger.open_task(task, tuple(requirements))
+    collector = ObservationCapability(ledger, "http-health-collector", (kind,))
+    ledger.seal()
+    if self_report:
+        ledger.record(task, executor_evidence(kind=kind), None)
+    if observation_at is not None:
+        collector.record_observation(task, kind, "probe HEALTHY",
+                                     satisfies=True, collected_at=observation_at)
+    return ledger, task
 
 
 def run(argv):
@@ -85,24 +122,21 @@ class PublicApiTests(unittest.TestCase):
         self.assertEqual(len(decision.accepted), 0)
 
     def test_the_facade_accepts_an_independent_observation(self):
-        decision = ProofOS().verify(
-            claim="Deployment complete.",
-            requirements=[Requirement("runtime_health", max_age_seconds=300)],
-            evidence=[executor_evidence(), observed_evidence()],
-            now=NOW,
-        )
+        reqs = [Requirement("runtime_health", max_age_seconds=300)]
+        ledger, task = recorded(requirements=reqs)
+        decision = ProofOS().verify_recorded(ledger, task, "Deployment complete.",
+                                             now=NOW)
         self.assertTrue(decision.verified)
         # The self-report is still refused; it just no longer matters.
         self.assertEqual([a.source for a in decision.rejected], ["EXECUTOR"])
         self.assertEqual([a.source for a in decision.accepted], ["OBSERVED"])
 
     def test_the_facade_honours_freshness(self):
-        decision = ProofOS().verify(
-            claim="Deployment complete.",
-            requirements=[Requirement("runtime_health", max_age_seconds=300)],
-            evidence=[observed_evidence(at=NOW - 86_400)],
-            now=NOW,
-        )
+        reqs = [Requirement("runtime_health", max_age_seconds=300)]
+        ledger, task = recorded(requirements=reqs, self_report=False,
+                                observation_at=NOW - 86_400)
+        decision = ProofOS().verify_recorded(ledger, task, "Deployment complete.",
+                                             now=NOW)
         self.assertFalse(decision.verified)
         self.assertEqual(str(decision.reason), "EVIDENCE_STALE")
 
@@ -113,9 +147,8 @@ class PublicApiTests(unittest.TestCase):
         self.assertFalse(decision.verified)
 
     def test_the_decision_carries_the_kernels_own_result(self):
-        decision = ProofOS().verify(
-            "done", [Requirement("runtime_health")], [observed_evidence()], now=NOW
-        )
+        ledger, task = recorded(requirements=[Requirement("runtime_health")])
+        decision = ProofOS().verify_recorded(ledger, task, "done", now=NOW)
         self.assertIs(decision.status, decision.raw.status)
         self.assertIs(decision.reason, decision.raw.failure)
 
@@ -209,10 +242,12 @@ class DemoTests(unittest.TestCase):
         # must produce the same two verdicts the demo displayed.
         proof = ProofOS()
         reqs = [Requirement("runtime_health", max_age_seconds=300)]
-        first = proof.verify("Deployment complete.", reqs, [executor_evidence()], now=NOW)
-        second = proof.verify(
-            "Deployment complete.", reqs, [executor_evidence(), observed_evidence()], now=NOW
-        )
+        claimed_ledger, task = recorded(requirements=reqs, observation_at=None)
+        first = proof.verify_recorded(claimed_ledger, task, "Deployment complete.",
+                                      now=NOW)
+        resolved_ledger, task2 = recorded(requirements=reqs)
+        second = proof.verify_recorded(resolved_ledger, task2, "Deployment complete.",
+                                       now=NOW)
         _, text = run(["demo"])
         self.assertIn(str(first.status), text)
         self.assertIn(str(second.status), text)
@@ -260,8 +295,11 @@ class VerifyCommandTests(unittest.TestCase):
         self.assertEqual(code, EXIT_ABSTAIN)
         self.assertEqual(json.loads(text)["reason"], "EVIDENCE_UNTRUSTED")
 
-    def test_an_independent_observation_verifies_and_exits_zero(self):
-        code, text = self.verify_file({
+    def test_an_observation_cannot_arrive_through_a_file(self):
+        # This used to exit 0. A file is written by whoever runs the command, so
+        # accepting its `source` field meant the strongest statement in the
+        # system was available to anyone who could type it.
+        code, _ = self.verify_file({
             "claim": "Deployment complete.",
             "requirements": [{"kind": "runtime_health", "max_age_seconds": 300}],
             "evidence": [
@@ -271,18 +309,15 @@ class VerifyCommandTests(unittest.TestCase):
                  "collected_at": NOW, "collector": "http-health-collector"},
             ],
         })
-        self.assertEqual(code, EXIT_VERIFIED)
-        self.assertEqual(json.loads(text)["status"], "VERIFIED")
+        self.assertEqual(code, EXIT_USAGE)
 
     def test_a_caller_cannot_declare_its_evidence_observed_and_win(self):
-        # This is the obvious attack on a file-driven CLI, and it is meant to
-        # work: `source` is a claim about the evidence, and the file is written
-        # by whoever runs the command. The defence is that a real deployment
-        # never lets the agent write this file -- provenance is assigned by the
-        # authorized ingestion path, not by the caller.
-        #
-        # The test pins the honest behaviour so nobody mistakes the CLI for a
-        # trust boundary it is not.
+        # This test asserted the opposite of its own name. It checked that
+        # declaring OBSERVED *did* win, and a comment explained why that was
+        # acceptable. Anyone reading the name would have concluded the hole was
+        # closed; the assertion said it was open. A claim that is not supported
+        # by its evidence is the thing this project exists to refuse, and it was
+        # sitting in the test suite.
         code, text = self.verify_file({
             "claim": "Deployment complete.",
             "requirements": [{"kind": "runtime_health"}],
@@ -290,8 +325,7 @@ class VerifyCommandTests(unittest.TestCase):
                           "source": "OBSERVED", "collected_at": NOW,
                           "collector": "deploy-agent"}],
         })
-        self.assertEqual(code, EXIT_VERIFIED)
-        self.assertIn("collector", json.loads(text)["evidence"][0])
+        self.assertEqual(code, EXIT_USAGE)
 
     def test_a_missing_file_is_a_usage_error_not_a_crash(self):
         code, _ = run(["verify", "definitely-not-a-file.json"])
@@ -433,16 +467,15 @@ class PolicyDrivenVerifyTests(unittest.TestCase):
         path = self.evidence([
             {"kind": "runtime_health", "value": "agent says up", "source": "EXECUTOR",
              "collected_at": NOW, "collector": "deploy-agent"},
-            {"kind": "tests", "value": "42 passed", "source": "OBSERVED",
-             "collected_at": NOW, "collector": "ci"},
         ])
         code, text = run(["verify", str(path), "--policy", str(self.policy),
                           "--json", "--now", str(NOW + 100)])
         self.assertEqual(code, EXIT_ABSTAIN)
-        data = json.loads(text)
-        self.assertEqual(data["missing"], ["runtime_health"])
+        # The file named one kind; the policy is what says two are required.
+        self.assertEqual(sorted(json.loads(text)["missing"]),
+                         ["runtime_health", "tests"])
 
-    def test_independent_evidence_for_every_requirement_verifies(self):
+    def test_a_policy_does_not_let_a_file_declare_its_own_provenance(self):
         path = self.evidence([
             {"kind": "runtime_health", "value": "probe HEALTHY", "source": "OBSERVED",
              "collected_at": NOW, "collector": "http-collector"},
@@ -451,19 +484,24 @@ class PolicyDrivenVerifyTests(unittest.TestCase):
         ])
         code, _ = run(["verify", str(path), "--policy", str(self.policy),
                        "--now", str(NOW + 100)])
-        self.assertEqual(code, EXIT_VERIFIED)
+        self.assertEqual(code, EXIT_USAGE)
 
-    def test_the_policys_freshness_horizon_is_enforced(self):
-        path = self.evidence([
-            {"kind": "runtime_health", "value": "probe HEALTHY", "source": "OBSERVED",
-             "collected_at": NOW, "collector": "http-collector"},
-            {"kind": "tests", "value": "42 passed", "source": "OBSERVED",
-             "collected_at": NOW, "collector": "ci"},
-        ])
-        code, text = run(["verify", str(path), "--policy", str(self.policy),
-                          "--json", "--now", str(NOW + 86_400)])
-        self.assertEqual(code, EXIT_ABSTAIN)
-        self.assertEqual(json.loads(text)["reason"], "EVIDENCE_STALE")
+    def test_the_file_path_can_never_reach_verified(self):
+        # The invariant left behind by the fix, stated as one property rather
+        # than inferred from the cases above. Whatever a file says about where
+        # its evidence came from, reading it cannot produce a verdict of
+        # VERIFIED -- either the provenance is one the caller may not declare,
+        # or it is one that cannot satisfy a requirement.
+        for source in ("OBSERVED", "EXECUTOR", "MODEL"):
+            with self.subTest(source=source):
+                path = self.evidence([
+                    {"kind": kind, "value": "whatever", "source": source,
+                     "collected_at": NOW, "collector": "someone"}
+                    for kind in ("runtime_health", "tests")
+                ])
+                code, _ = run(["verify", str(path), "--policy", str(self.policy),
+                               "--now", str(NOW + 100)])
+                self.assertNotEqual(code, EXIT_VERIFIED)
 
     def test_a_broken_policy_is_a_usage_error_not_a_verdict(self):
         broken = self.dir / "broken.toml"
@@ -472,3 +510,92 @@ class PolicyDrivenVerifyTests(unittest.TestCase):
         path = self.evidence([])
         code, _ = run(["verify", str(path), "--policy", str(broken)])
         self.assertEqual(code, EXIT_USAGE)
+
+
+class ProvenanceIsEarnedNotDeclaredTests(unittest.TestCase):
+    """The façade used to accept a provenance its caller typed in.
+
+    ``ProofOS().verify(evidence=[Evidence(..., source=OBSERVED)])`` returned
+    verified=True. One line, through the documented front door, and the
+    headline promise was false: the party asking for the verdict was supplying
+    the independence.
+
+    The kernel was never wrong about this. ``verify_completion`` is a decision
+    function over evidence whose provenance is already settled, and every
+    runtime path feeds it from a ledger. The façade was the one entry point
+    where the label could be written rather than earned, and it was the first
+    thing a new user would touch.
+    """
+
+    REQS = (Requirement("runtime_health", max_age_seconds=300),)
+
+    def test_declaring_observed_is_refused(self):
+        with self.assertRaises(ProvenanceNotDeclarable) as caught:
+            ProofOS().verify("Deployment complete.", self.REQS,
+                             [observed_evidence()], now=NOW)
+        message = str(caught.exception)
+        self.assertIn("runtime_health", message)
+        self.assertIn("OBSERVED", message)
+
+    def test_the_refusal_says_where_an_observation_comes_from(self):
+        # An error that only says no teaches nothing. This one has to name the
+        # path that does work, or the next thing the reader tries is a wrapper
+        # around the thing that was just refused.
+        with self.assertRaises(ProvenanceNotDeclarable) as caught:
+            ProofOS().verify("done", self.REQS, [observed_evidence()], now=NOW)
+        message = str(caught.exception)
+        self.assertIn("ObservationCapability", message)
+        self.assertIn("EvidenceLedger", message)
+
+    def test_one_declared_record_taints_the_whole_call(self):
+        # Not "filter it out and carry on". A caller who thought they were
+        # supplying an observation should learn that, not receive a quieter
+        # answer computed from the rest.
+        with self.assertRaises(ProvenanceNotDeclarable):
+            ProofOS().verify("done", self.REQS,
+                             [executor_evidence(), observed_evidence()], now=NOW)
+
+    def test_untrusted_provenance_is_still_answered_normally(self):
+        # The refusal is about provenance a caller may not grant itself, not
+        # about being strict with input. A self-report is a legitimate question.
+        decision = ProofOS().verify("done", self.REQS, [executor_evidence()], now=NOW)
+        self.assertFalse(decision.verified)
+        self.assertEqual(str(decision.reason), "EVIDENCE_UNTRUSTED")
+
+    def test_the_refusal_is_derived_from_the_kernels_trusted_set(self):
+        # If a later build decides some other provenance is independent, the
+        # façade must refuse that one too. A hardcoded OBSERVED check would go
+        # on passing while covering less than it did.
+        from proofos.verifier import TRUSTED_SOURCES
+
+        source = inspect.getsource(ProofOS._refuse_declared_provenance)
+        self.assertIn("TRUSTED_SOURCES", source)
+        self.assertNotIn("EvidenceSource.OBSERVED", source)
+        self.assertIn(EvidenceSource.OBSERVED, TRUSTED_SOURCES)
+
+    def test_a_ledger_observation_verifies(self):
+        ledger, task = recorded(requirements=self.REQS)
+        decision = ProofOS().verify_recorded(ledger, task, "Deployment complete.",
+                                             now=NOW)
+        self.assertTrue(decision.verified)
+        self.assertEqual([a.source for a in decision.accepted], ["OBSERVED"])
+
+    def test_the_ledger_path_takes_its_requirements_from_the_ledger(self):
+        # A caller who could pass their own requirements here could ask an
+        # easier question than the one the task was opened with.
+        ledger, task = recorded(requirements=self.REQS, observation_at=None)
+        decision = ProofOS().verify_recorded(ledger, task, "done", now=NOW)
+        self.assertFalse(decision.verified)
+        self.assertEqual(list(decision.missing), ["runtime_health"])
+
+    def test_writing_observed_to_a_ledger_still_needs_a_grant(self):
+        # The boundary the façade now defers to. Worth pinning here as well:
+        # if this ever stopped holding, verify_recorded would inherit the hole
+        # the façade just gave up.
+        from proofos.capabilities import CapabilityDenied
+
+        ledger = EvidenceLedger()
+        ledger.open_task("T-2", self.REQS)
+        ledger.seal()
+        with self.assertRaises(CapabilityDenied):
+            ledger.record("T-2", observed_evidence(), None)

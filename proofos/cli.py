@@ -25,7 +25,9 @@ import sys
 import time
 from typing import Sequence
 
-from .api import Decision, ProofOS
+from .api import Decision, ProofOS, ProvenanceNotDeclarable
+from .capabilities import ObservationCapability
+from .ledger import EvidenceLedger
 from .policy import STARTER_POLICY, PolicyError, load_policy
 from .verifier import Evidence, EvidenceSource, Requirement
 
@@ -185,6 +187,11 @@ def cmd_doctor(args, out) -> int:
     return EXIT_OPERATIONAL if failed else EXIT_VERIFIED
 
 
+#: The task the demo opens. Named so the ledger has something to attach to;
+#: nothing else depends on the value.
+_DEMO_TASK = "DEMO-1"
+
+
 #: The demo is a real verification, not a script that prints a story. Every
 #: status below is produced by the kernel at the moment it is shown.
 def cmd_demo(args, out) -> int:
@@ -193,6 +200,11 @@ def cmd_demo(args, out) -> int:
     requirements = [Requirement("runtime_health", max_age_seconds=300)]
     colour = _use_colour(out)
 
+    # The self-report is something a caller can construct, because saying "I did
+    # it" requires no authority. The observation is not: it is produced by a
+    # capability, recorded in a ledger, and read back from there. That asymmetry
+    # is the whole demo, so the demo has to be built the way the runtime is
+    # rather than by labelling two records differently.
     self_report = Evidence(
         kind="runtime_health",
         value="deploy-agent states: the service is up",
@@ -200,18 +212,24 @@ def cmd_demo(args, out) -> int:
         collected_at=now,
         collector="deploy-agent",
     )
-    observation = Evidence(
-        kind="runtime_health",
-        value="probe HEALTHY: HTTP 200 in 12ms",
-        source=EvidenceSource.OBSERVED,
-        collected_at=now,
-        collector="http-health-collector",
-    )
 
-    claimed = proof.verify("Deployment complete.", requirements, [self_report], now=now)
-    resolved = proof.verify(
-        "Deployment complete.", requirements, [self_report, observation], now=now
+    ledger = EvidenceLedger()
+    ledger.open_task(_DEMO_TASK, tuple(requirements))
+    collector = ObservationCapability(
+        ledger, "http-health-collector", ("runtime_health",)
     )
+    ledger.seal()
+    ledger.record(_DEMO_TASK, self_report, None)
+
+    claimed = proof.verify_recorded(ledger, _DEMO_TASK, "Deployment complete.",
+                                    now=now)
+
+    collector.record_observation(
+        _DEMO_TASK, "runtime_health", "probe HEALTHY: HTTP 200 in 12ms",
+        satisfies=True, collected_at=now,
+    )
+    resolved = proof.verify_recorded(ledger, _DEMO_TASK, "Deployment complete.",
+                                     now=now)
 
     if args.json:
         json.dump({
@@ -321,8 +339,16 @@ def _usage(message: str) -> int:
 def cmd_verify(args, out) -> int:
     """Verify a claim against evidence supplied as JSON.
 
-    Deliberately dumb about where the evidence came from. Provenance is a
-    property of the evidence record, and the kernel decides what it is worth.
+    A file is wire input, so the ``source`` field in it is a claim about
+    provenance and not provenance itself. Reading it straight through was how
+    ``{"source": "OBSERVED"}`` used to produce exit 0: the strongest statement
+    in the system, available to anyone who could write a file.
+
+    So this refuses to read an independent provenance out of a document. What
+    remains is genuinely useful -- it answers what a set of self-reports is
+    worth, which is ABSTAIN, and says why. Reaching VERIFIED needs an
+    observation that was made rather than typed, and that arrives through the
+    ingestion boundary rather than through argv.
     """
     data = _load(args.evidence)
 
@@ -366,7 +392,11 @@ def cmd_verify(args, out) -> int:
     except ValueError as exc:
         return _usage(f"{args.evidence}: {exc}")
 
-    decision = ProofOS().verify(claim, requirements, evidence, now=args.now)
+    try:
+        decision = ProofOS().verify(claim, requirements, evidence, now=args.now)
+    except ProvenanceNotDeclarable as exc:
+        sys.stderr.write(f"proofos: {args.evidence}: {exc}" + "\n")
+        return EXIT_USAGE
 
     if args.json:
         json.dump({"schema_version": 1, **decision.as_dict()}, out, indent=2)
