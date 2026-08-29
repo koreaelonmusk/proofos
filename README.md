@@ -12,6 +12,18 @@ It replays a recorded Cloud Run execution: a self-report refused, an
 independent observation accepted, and the hash-chained journal behind both.
 No install, no sign-in.
 
+## Demo
+
+[**▶ Watch the 3:45 demo**](https://koreaelonmusk.github.io/proofos/#demo-video)
+— plays in the browser, no sign-in.
+
+A self-report refused, an independent observation accepted, and a prompt
+injection that compromised the model without compromising the verdict. The file
+is a [release asset](https://github.com/koreaelonmusk/proofos/releases/tag/hackathon-demo-2026)
+rather than a commit, so cloning this repository still costs a few seconds.
+[English subtitles](https://github.com/koreaelonmusk/proofos/releases/download/hackathon-demo-2026/proofos-demo.en.srt)
+ship alongside it.
+
 ```mermaid
 flowchart TD
     A["Agent claims success"] --> B["ABSTAIN<br/>self-report rejected"]

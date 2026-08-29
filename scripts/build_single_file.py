@@ -41,6 +41,23 @@ FORBIDDEN = [
 #: the first time it cries wolf.
 ALLOWED_HOSTS = ()
 
+#: A region of the hosted page that has no place in the offline copy. Today that
+#: is the demo video, which streams from a release server -- exactly the kind of
+#: dependency this build exists to remove.
+#:
+#: Removing markup before checking it would be a hole big enough to drive a
+#: tracker through, so the region is inspected on its way out: it may reference
+#: whatever hosts it needs, and it may not carry anything that executes.
+HOSTED_ONLY = re.compile(
+    r"<!--\s*hosted-only:start.*?<!--\s*hosted-only:end\s*-->", re.S
+)
+NOT_IN_HOSTED_ONLY = (
+    (re.compile(r"<script\b", re.I), "a script element"),
+    (re.compile(r"\son[a-z]+\s*=", re.I), "an inline event handler"),
+    (re.compile(r"javascript:", re.I), "a javascript: url"),
+    (re.compile(r"<iframe\b", re.I), "an iframe"),
+)
+
 #: Anything that could start work rather than replay it. A judge-facing page
 #: able to reach an execution endpoint is a page able to spend quota, and it
 #: stops being a replay the moment it does.
@@ -68,6 +85,15 @@ def build() -> str:
     # inlined copies replace.
     body = html.split("<body>", 1)[1].split("</body>", 1)[0]
     body = body.replace('<script src="app.js"></script>', "")
+
+    for removed in HOSTED_ONLY.findall(body):
+        for pattern, label in NOT_IN_HOSTED_ONLY:
+            if pattern.search(removed):
+                raise SystemExit(
+                    f"REFUSING: a hosted-only region contains {label}; "
+                    "that region is not checked for hosts, so it may not run code"
+                )
+    body = HOSTED_ONLY.sub("", body)
 
     title = re.search(r"<title>(.*?)</title>", html, re.S).group(1).strip()
     fonts = re.findall(r'<link rel="(?:preconnect|stylesheet)"[^>]*>', html)
