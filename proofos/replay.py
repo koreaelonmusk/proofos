@@ -36,6 +36,29 @@ path does not exist. That is the structural half of "replayed evidence is not a
 new observation": the other half is that this module performs no I/O, so there
 is no new observation available to it in the first place.
 
+## When the evidence is signed
+
+A record may carry the attestation envelope its collector signed. Then the
+question stops being "does the caller vouch for this name" and becomes "does
+this signature verify against a key the *replaying environment* holds" -- which
+is a better question, and still not a question about truth. Four states stay
+apart: signed, signed by a key someone vouches for, authorized for this kind,
+and satisfies the requirement. Only the last one is a verdict, and it is reached
+somewhere else.
+
+The trust root arrives as an argument -- a ``CollectorRegistry``, the same type
+production uses. Nothing in a bundle can add to it, because verification never
+reads a key out of the envelope: it reads the ``collector_id``, asks the
+registry for that collector's key, and checks the signature against that. An
+attacker's perfectly valid signature over a perfectly formed envelope naming
+``trusted-collector`` fails, because the registry's key for that name is not the
+attacker's.
+
+And the two paths do not rescue each other. A record carrying an attestation
+must have that attestation verify; naming its collector in
+``trusted_collectors`` does nothing for it. Otherwise the weaker path would
+quietly become the way around the stronger one.
+
 ## What replay is entitled to say
 
     "Given these records, ProofOS reaches VERIFIED for time T."
@@ -59,7 +82,14 @@ from typing import Any, Iterable
 
 from .api import Decision, ProofOS
 from .bundle import EvidenceRecord, ProofBundle
+from .capabilities import ObservationCapability
 from .ledger import EvidenceLedger
+from .portable_attestation import (
+    AttestationUnavailable,
+    PortableAttestationRejected,
+    bind_to_record,
+    verify_portable,
+)
 from .verifier import Evidence, EvidenceSource, Requirement
 
 #: The provenance a bundle may claim and a caller may confirm. Derived from the
@@ -100,9 +130,12 @@ class ReplayResult:
     recorded_reason: str
     #: Records whose recorded OBSERVED provenance the caller vouched for.
     reinstated: tuple[str, ...] = ()
-    #: Records recorded as OBSERVED whose collector the caller did not vouch
-    #: for. Carried as EXECUTOR: kept, and worth nothing.
+    #: Records the original run recorded as independent whose provenance this
+    #: replay would not confirm. Carried as a self-report: kept, worth nothing.
     demoted: tuple[str, ...] = ()
+    #: Why each carried attestation was refused, so a reviewer can tell an
+    #: absent trust anchor from a forged signature.
+    rejected: tuple[tuple[str, str], ...] = ()
 
     @property
     def status(self) -> str:
@@ -133,12 +166,14 @@ class ReplayResult:
             "matches_recorded": self.matches_recorded,
             "reinstated": list(self.reinstated),
             "demoted": list(self.demoted),
+            "rejected": [list(item) for item in self.rejected],
         }
 
 
 def replay_historical(
     bundle: ProofBundle,
     *,
+    trust_anchor: Any = None,
     trusted_collectors: Iterable[str] = (),
     expected_digest: str = "",
 ) -> ReplayResult:
@@ -151,7 +186,7 @@ def replay_historical(
     # `None` rather than bundle.verification_time: the argument is read
     # after the type check, so a caller passing something that is not a
     # bundle meets the refusal rather than an AttributeError.
-    return _replay(bundle, None, ReplayMode.HISTORICAL,
+    return _replay(bundle, None, ReplayMode.HISTORICAL, trust_anchor,
                    trusted_collectors, expected_digest)
 
 
@@ -159,6 +194,7 @@ def re_evaluate_at(
     bundle: ProofBundle,
     now: float,
     *,
+    trust_anchor: Any = None,
     trusted_collectors: Iterable[str] = (),
     expected_digest: str = "",
 ) -> ReplayResult:
@@ -170,14 +206,15 @@ def re_evaluate_at(
     observation outside it and abstain. An old proof going quiet is the horizon
     doing its job.
     """
-    return _replay(bundle, now, ReplayMode.RE_EVALUATED, trusted_collectors,
-                   expected_digest)
+    return _replay(bundle, now, ReplayMode.RE_EVALUATED, trust_anchor,
+                   trusted_collectors, expected_digest)
 
 
 def _replay(
     bundle: ProofBundle,
     now: float | None,
     mode: ReplayMode,
+    trust_anchor: Any,
     trusted_collectors: Iterable[str],
     expected_digest: str,
 ) -> ReplayResult:
@@ -198,43 +235,58 @@ def _replay(
             "the one you asked for")
 
     trusted = frozenset(str(name) for name in trusted_collectors if str(name))
+
+    reinstated: list[str] = []
+    demoted: list[str] = []
+    rejected: list[tuple[str, str]] = []
+    for record in bundle.evidence:
+        _require_record_intact(record)
+        if not _was_trusted(record):
+            continue
+        if record.attestation:
+            # Carrying a signature means the signature answers the question.
+            # Being named in trusted_collectors does not rescue a record whose
+            # attestation failed -- otherwise the weaker path would be the way
+            # around the stronger one.
+            refusal = _attestation_refusal(record, bundle, trust_anchor, now)
+            if refusal:
+                rejected.append((record.content_hash, refusal))
+                demoted.append(record.content_hash)
+            else:
+                reinstated.append(record.content_hash)
+        elif record.collector in trusted:
+            reinstated.append(record.content_hash)
+        else:
+            demoted.append(record.content_hash)
+
+    confirmed = frozenset(reinstated)
     ledger = EvidenceLedger()
     ledger.open_task(bundle.task_id, tuple(
         Requirement(kind=r.kind, max_age_seconds=r.max_age_seconds)
         for r in bundle.requirements))
 
-    reinstated: list[str] = []
-    demoted: list[str] = []
-    plan: list[tuple[EvidenceRecord, EvidenceSource]] = []
-    for record in bundle.evidence:
-        _require_record_intact(record)
-        source = _source_for(record, trusted)
-        if _was_trusted(record):
-            (reinstated if source in TRUSTED_SOURCES else demoted).append(
-                record.content_hash)
-        plan.append((record, source))
-
-    # Grants are minted by this process from its own ledger. The bundle
-    # contributes a list of records; it never contributes authority.
-    grants: dict[str, Any] = {
-        collector: ledger.grant_observation(collector, tuple(sorted(kinds)))
-        for collector, kinds in grant_plan(bundle, trusted).items()
+    # Capabilities are minted by this process from its own ledger, for the
+    # collectors this replay confirmed. The bundle contributes a list of
+    # records; it never contributes authority. Recording through the capability
+    # rather than assembling an Evidence by hand is why this module contains no
+    # code that names an independent provenance at all.
+    capabilities = {
+        collector: ObservationCapability(ledger, collector, tuple(sorted(kinds)))
+        for collector, kinds in grant_plan(bundle, trusted,
+                                           attested=confirmed).items()
     }
     ledger.seal()
 
-    for record, source in plan:
-        ledger.record(
-            bundle.task_id,
-            Evidence(
-                kind=record.kind,
-                value=record.value,
-                source=source,
-                valid=record.valid,
-                collected_at=record.collected_at,
-                collector=record.collector,
-            ),
-            grants.get(record.collector) if source in TRUSTED_SOURCES else None,
-        )
+    for record in bundle.evidence:
+        if record.content_hash in confirmed:
+            capabilities[record.collector].record_observation(
+                bundle.task_id, kind=record.kind, value=record.value,
+                satisfies=record.valid, collected_at=record.collected_at)
+        else:
+            ledger.record(bundle.task_id, Evidence(
+                kind=record.kind, value=record.value,
+                source=_untrusted_source(record), valid=record.valid,
+                collected_at=record.collected_at, collector=record.collector))
 
     decision = ProofOS().verify_recorded(ledger, bundle.task_id, bundle.claim,
                                          now=now)
@@ -247,11 +299,31 @@ def _replay(
         recorded_reason=bundle.recorded_reason,
         reinstated=tuple(reinstated),
         demoted=tuple(demoted),
+        rejected=tuple(rejected),
     )
 
 
-def grant_plan(bundle: ProofBundle,
-               trusted: Iterable[str]) -> dict[str, frozenset[str]]:
+def _attestation_refusal(record: EvidenceRecord, bundle: ProofBundle,
+                         trust_anchor: Any, now: float) -> str:
+    """Empty when the carried attestation verifies and belongs to this record.
+
+    Every failure is a refusal, including "the signature machinery is not
+    installed". An unchecked signature is not a weaker yes.
+    """
+    try:
+        observation = verify_portable(record.attestation, registry=trust_anchor,
+                                      now=now)
+        bind_to_record(observation, record, task_id=bundle.task_id,
+                       execution_id=bundle.execution_id)
+    except PortableAttestationRejected as exc:
+        return exc.reason
+    except AttestationUnavailable:
+        return "SIGNATURE_MACHINERY_UNAVAILABLE"
+    return ""
+
+
+def grant_plan(bundle: ProofBundle, trusted: Iterable[str], *,
+               attested: Iterable[str] = ()) -> dict[str, frozenset[str]]:
     """Exactly which collectors this replay will vouch for, and for which kinds.
 
     A separate, testable function rather than a loop inside the replay, because
@@ -266,9 +338,16 @@ def grant_plan(bundle: ProofBundle,
     kind of thing a later edit changes.
     """
     allowed = frozenset(str(name) for name in trusted if str(name))
+    confirmed = frozenset(attested)
     plan: dict[str, set[str]] = {}
     for record in bundle.evidence:
-        if _was_trusted(record) and record.collector in allowed:
+        if not _was_trusted(record):
+            continue
+        # A record carrying a signature is admitted by that signature or not at
+        # all. A name in `trusted` speaks only for records that carry none.
+        vouched = (record.content_hash in confirmed if record.attestation
+                   else record.collector in allowed)
+        if vouched:
             plan.setdefault(record.collector, set()).add(record.kind)
     return {collector: frozenset(kinds) for collector, kinds in plan.items()}
 
@@ -278,18 +357,23 @@ def _was_trusted(record: EvidenceRecord) -> bool:
     return record.source in {str(s) for s in TRUSTED_SOURCES}
 
 
-def _source_for(record: EvidenceRecord, trusted: frozenset[str]) -> EvidenceSource:
-    """Decide one record's provenance for this replay.
+def _untrusted_source(record: EvidenceRecord) -> EvidenceSource:
+    """The provenance for a record this replay did not confirm.
 
-    The only outcomes are: keep what was recorded, or fall back to EXECUTOR.
-    There is no argument, no flag and no branch that returns a provenance
-    stronger than the one in the record -- which is why naming a collector that
-    only ever self-reported changes nothing.
+    Every path out of here is untrusted, and the last line says so rather than
+    assuming it: a later edit that made this function capable of returning an
+    independent provenance would be the whole failure, and it would look like a
+    one-line change.
     """
-    if _was_trusted(record):
-        if record.collector and record.collector in trusted:
-            return EvidenceSource(record.source)
-        return EvidenceSource.EXECUTOR
+    source = EvidenceSource.EXECUTOR if _was_trusted(record) else _declared(record)
+    if source in TRUSTED_SOURCES:
+        raise ReplayError(
+            "an unconfirmed record reached an independent provenance. This is "
+            "the one thing replay must not be able to do")
+    return source
+
+
+def _declared(record: EvidenceRecord) -> EvidenceSource:
     try:
         return EvidenceSource(record.source)
     except ValueError:
