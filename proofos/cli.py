@@ -20,7 +20,9 @@ Exit codes matter in CI, so they are distinct and stable:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import pathlib
 import sys
 import time
 from typing import Sequence
@@ -29,7 +31,8 @@ from .api import Decision, ProofOS, ProvenanceNotDeclarable
 from .capabilities import ObservationCapability
 from .ledger import EvidenceLedger
 from .policy import STARTER_POLICY, PolicyError, load_policy
-from .verifier import Evidence, EvidenceSource, Requirement
+from .probe import ProbeOutcome, probe_health
+from .verifier import TRUSTED_SOURCES, Evidence, EvidenceSource, Requirement
 
 EXIT_VERIFIED = 0
 EXIT_ABSTAIN = 1
@@ -329,11 +332,86 @@ def _load(path: str) -> dict:
         raise SystemExit(_usage(f"no such file: {path}"))
     except json.JSONDecodeError as exc:
         raise SystemExit(_usage(f"{path} is not valid JSON: {exc}"))
+    except OSError as exc:
+        # Present but unreadable. Naming the wrong file is a usage error; a file
+        # the process cannot open is the environment failing, and a CI job needs
+        # to tell those apart to know whether to retry.
+        sys.stderr.write(f"proofos: could not read {path}: {type(exc).__name__}" + "\n")
+        raise SystemExit(EXIT_OPERATIONAL)
 
 
 def _usage(message: str) -> int:
     sys.stderr.write(f"proofos: {message}\n")
     return EXIT_USAGE
+
+
+#: The identity this command writes observations under. It is a real collector
+#: identity in the ledger's sense -- the CLI held a capability and wrote what it
+#: saw -- and it claims nothing about the thing observed beyond that.
+CLI_COLLECTOR = "proofos-cli"
+
+#: The task the file-driven path opens. One run, one task; nothing persists.
+_VERIFY_TASK = "cli-verify"
+
+
+class _VerifyUsage(ValueError):
+    """A malformed instruction in the input file."""
+
+
+class _Unavailable(Exception):
+    """A check that could not be carried out.
+
+    Distinct from a check that found something wrong. Not reaching a service is
+    not a finding about the service, and an observation that never happened must
+    not leave a record saying it did.
+    """
+
+    def __init__(self, kind: str, reason: str) -> None:
+        self.kind = kind
+        self.reason = reason
+        super().__init__(f"{kind}: {reason}")
+
+
+def _observe(spec, index: int) -> tuple[str, str, bool]:
+    """Go and check one thing, and report what was seen.
+
+    This is what makes exit 0 reachable again without reopening the hole that
+    closed it. The old path let a file say ``"source": "OBSERVED"`` and be
+    believed. This one reads no provenance at all: it reads an instruction --
+    probe this URL, hash this file -- carries it out, and records the result
+    under the CLI's own collector identity. The CLI is then genuinely the thing
+    that looked, which is the only way OBSERVED is ever earned.
+    """
+    path = f"observations[{index}]"
+    if not isinstance(spec, dict):
+        raise _VerifyUsage(f"{path} must be an object")
+    kind = spec.get("kind")
+    if not isinstance(kind, str) or not kind.strip():
+        raise _VerifyUsage(f"{path}.kind is missing")
+    check = spec.get("check")
+
+    if check == "http":
+        url = spec.get("url")
+        if not isinstance(url, str) or not url.strip():
+            raise _VerifyUsage(f"{path}.url is missing")
+        result = probe_health(url, timeout=float(spec.get("timeout", 5.0)))
+        if result.outcome in (ProbeOutcome.UNREACHABLE, ProbeOutcome.TIMEOUT):
+            raise _Unavailable(kind, f"{result.outcome}: {result.detail}")
+        return (kind, f"{result.outcome}: {result.detail}",
+                result.outcome is ProbeOutcome.HEALTHY)
+
+    if check == "digest":
+        target = spec.get("path")
+        if not isinstance(target, str) or not target.strip():
+            raise _VerifyUsage(f"{path}.path is missing")
+        try:
+            data = pathlib.Path(target).read_bytes()
+        except OSError as exc:
+            raise _Unavailable(kind, f"could not read {target}: {type(exc).__name__}") from None
+        return kind, f"sha256 {hashlib.sha256(data).hexdigest()}", True
+
+    raise _VerifyUsage(
+        f"{path}.check is {check!r}; this build can perform 'http' or 'digest'")
 
 
 def cmd_verify(args, out) -> int:
@@ -392,8 +470,55 @@ def cmd_verify(args, out) -> int:
     except ValueError as exc:
         return _usage(f"{args.evidence}: {exc}")
 
+    declared = [e for e in evidence if e.source in TRUSTED_SOURCES]
+    if declared:
+        # The refusal that closed the hole, kept where the reader meets it, and
+        # pointing at the path that does work rather than only saying no.
+        kinds = sorted({e.kind for e in declared})
+        labels = sorted({str(e.source) for e in declared})
+        sys.stderr.write(
+            f"proofos: {args.evidence}: evidence for {kinds} arrived labelled "
+            f"{labels}. A file is written by whoever runs this command, so it "
+            "cannot establish independent provenance." + "\n"
+            "  To have ProofOS observe something itself, add an "
+            "\"observations\" entry with a check of \"http\" or \"digest\"." + "\n")
+        return EXIT_USAGE
+
+    # One ledger for this run. The CLI grants itself an observation capability
+    # for exactly the kinds it was asked to check, then seals -- so nothing
+    # arriving later can widen what it may write.
+    specs = data.get("observations") or ()
+    if not isinstance(specs, (list, tuple)):
+        return _usage(f"{args.evidence}: 'observations' must be a list")
+    observed_kinds = tuple({str(s.get("kind")) for s in specs
+                            if isinstance(s, dict) and s.get("kind")})
+
+    ledger = EvidenceLedger()
+    ledger.open_task(_VERIFY_TASK, tuple(requirements))
+    collector = ObservationCapability(ledger, CLI_COLLECTOR, observed_kinds)
+    ledger.seal()
+    for item in evidence:
+        ledger.record(_VERIFY_TASK, item, None)
+
+    observed_at = args.now if args.now is not None else time.time()
+    for index, spec in enumerate(specs):
+        try:
+            kind, value, satisfies = _observe(spec, index)
+        except _VerifyUsage as exc:
+            return _usage(f"{args.evidence}: {exc}")
+        except _Unavailable as exc:
+            # Nothing is recorded. A requirement with no observation is not
+            # satisfied, and the operator is told why rather than meeting an
+            # unexplained ABSTAIN.
+            sys.stderr.write(f"proofos: could not observe {exc}" + "\n")
+            continue
+        collector.record_observation(_VERIFY_TASK, kind, value,
+                                     satisfies=satisfies,
+                                     collected_at=observed_at)
+
     try:
-        decision = ProofOS().verify(claim, requirements, evidence, now=args.now)
+        decision = ProofOS().verify_recorded(ledger, _VERIFY_TASK, claim,
+                                             now=args.now)
     except ProvenanceNotDeclarable as exc:
         sys.stderr.write(f"proofos: {args.evidence}: {exc}" + "\n")
         return EXIT_USAGE
