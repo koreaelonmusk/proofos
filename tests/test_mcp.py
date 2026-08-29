@@ -14,13 +14,11 @@ the adapter and the suite would stay green.
 from __future__ import annotations
 
 import ast
-import json
 import pathlib
 import unittest
 
 from proofos import EvidenceSource, ProofOS, Requirement
-from proofos.adapters import AdapterError, HttpAdapter, PythonAdapter
-from proofos.adapters import ADAPTER_SCHEMA, CLAIMED_NAMESPACE, claimed_by_sender
+from proofos.adapters import AdapterError, CLAIMED_NAMESPACE, claimed_by_sender
 from proofos.mcp import (
     MCP_SCHEMA,
     McpAdapter,
@@ -248,50 +246,10 @@ class APromptIsNotEvidenceTests(unittest.TestCase):
                          (str(after.status), str(after.reason)))
 
 
-class TransportDoesNotChangeTruthTests(unittest.TestCase):
-    """The crown. One statement, four ways in, one set of truth semantics."""
-
-    STATEMENT = "actor X claims task Y succeeded"
-
-    def envelopes(self):
-        python = PythonAdapter("runner", framework="mcp").normalize(
-            actor_id="agent-x", task_id="TASK-Y", claim=self.STATEMENT,
-            execution_id="e1", at=NOW)
-        http = HttpAdapter("gateway").normalize(json.dumps({
-            "schema_version": ADAPTER_SCHEMA,
-            "actor": {"actor_id": "agent-x", "framework": "mcp"},
-            "task": {"task_id": "TASK-Y", "execution_id": "e1"},
-            "claim": self.STATEMENT, "at": NOW}))
-        mcp_tool = adapter().normalize_tool_result(
-            tool_result(content=[{"type": "text", "text": self.STATEMENT}]),
-            actor_id="agent-x", task_id="TASK-Y", execution_id="e1", at=NOW)
-        mcp_resource = adapter().normalize_resource(
-            resource(text=self.STATEMENT), actor_id="agent-x",
-            task_id="TASK-Y", execution_id="e1", at=NOW)
-        return {"python": python, "http": http,
-                "mcp_tool": mcp_tool, "mcp_resource": mcp_resource}
-
-    def test_all_four_transports_agree_on_truth_semantics(self):
-        semantics = {name: env.truth_semantics
-                     for name, env in self.envelopes().items()}
-        first = semantics["python"]
-        for name, value in semantics.items():
-            with self.subTest(transport=name):
-                self.assertEqual(value, first)
-
-    def test_transport_metadata_differs_and_is_excluded(self):
-        envelopes = self.envelopes()
-        transports = {env.transport for env in envelopes.values()}
-        self.assertEqual(transports, {"python", "http", "mcp"})
-        for env in envelopes.values():
-            for excluded in ("transport", "adapter_id", "metadata", "server_id"):
-                self.assertNotIn(excluded, env.truth_semantics)
-
-    def test_all_four_reach_the_same_verdict(self):
-        verdicts = {(str(kernel_verdict(env).status), str(kernel_verdict(env).reason))
-                    for env in self.envelopes().values()}
-        self.assertEqual(len(verdicts), 1)
-        self.assertEqual(next(iter(verdicts))[0], "ABSTAIN")
+# The cross-transport crown moved to tests/test_transport_equivalence.py when
+# A2A and ADK arrived. It belongs to no single adapter -- it is the property
+# every adapter exists to preserve -- and one home for it means the next
+# transport extends the table rather than starting a second one.
 
 
 class ThisModuleDecidesNothingTests(unittest.TestCase):
