@@ -22,6 +22,7 @@ import unittest
 
 from proofos import Evidence, EvidenceSource, ProofOS, Requirement
 from proofos.adapters import AdapterError
+from proofos.evidence_bridge import evidence_from_envelope
 from proofos.github import (
     CheckConclusion,
     CheckRun,
@@ -52,7 +53,7 @@ def payload(**overrides) -> dict:
 def decide(pr: dict):
     envelope = normalize_pull_request(pr)
     return ProofOS().verify(envelope.claim.text, REQS,
-                            envelope.as_evidence(KIND), now=NOW), envelope
+                            evidence_from_envelope(envelope, KIND), now=NOW), envelope
 
 
 class GitHubProseIsAClaimTests(unittest.TestCase):
@@ -92,7 +93,7 @@ class GitHubProseIsAClaimTests(unittest.TestCase):
 
     def test_no_normalized_evidence_is_ever_observed(self):
         _, envelope = decide(payload(check_runs=[{"name": "t", "conclusion": "success"}]))
-        for evidence in envelope.as_evidence(KIND):
+        for evidence in evidence_from_envelope(envelope, KIND):
             self.assertIsNot(evidence.source, EvidenceSource.OBSERVED)
 
 

@@ -12,10 +12,13 @@ it is the only one that survives being wrong about people's intentions:
   ``trusted``, no ``independent`` and no ``verdict``. A payload that arrives
   containing those words is kept as untrusted metadata, where it reads as what
   it is -- something the sender wrote.
-* ``as_evidence`` maps the neutral model onto ``Evidence``, and there is no
-  branch in it that produces ``OBSERVED``. Not a check that rejects one -- no
-  path that reaches one. A claim becomes EXECUTOR, a model assertion becomes
-  MODEL, a tool result becomes EXECUTOR, and nothing becomes independent.
+* This module does not encode ``Evidence`` at all, and does not import the type.
+  Turning a neutral submission into evidence is a separate, explicit step in
+  ``proofos.evidence_bridge`` -- the wall between translating what a sender said
+  and encoding it for the verifier. An adapter that helpfully minted evidence
+  would have moved the trust boundary into the translation layer; keeping the
+  verifier types out of this file makes that structurally impossible rather than
+  merely discouraged.
 * No type here has a ``verify``, ``accept`` or ``trust`` method. The verdict
   arrives from the kernel, over evidence whose provenance was established
   somewhere this module cannot reach.
@@ -46,8 +49,6 @@ import math
 import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
-
-from .verifier import Evidence, EvidenceSource
 
 #: Bumped when the wire shape changes in a way older builds cannot read.
 ADAPTER_SCHEMA = 1
@@ -183,34 +184,6 @@ class AdapterEnvelope:
     adapter_id: str = ""
     transport: str = ""
     metadata: Mapping[str, Any] = field(default_factory=dict)
-
-    def as_evidence(self, kind: str) -> tuple[Evidence, ...]:
-        """Map this submission onto evidence records.
-
-        Every record is EXECUTOR or MODEL. There is no branch here that returns
-        OBSERVED -- not a rejected one, an absent one -- because independence is
-        a property of who observed something, and everything in this envelope
-        came from the component whose claim is being examined.
-
-        The façade refuses caller-declared OBSERVED as well, so an adapter that
-        tried would meet a second wall. This is the first.
-        """
-        records = [Evidence(
-            kind=kind,
-            value=self.claim.text[:MAX_TEXT],
-            source=EvidenceSource.EXECUTOR,
-            collected_at=self.claim.at,
-            collector=self.claim.actor.actor_id,
-        )]
-        for result in self.tool_results:
-            records.append(Evidence(
-                kind=kind,
-                value=f"{result.tool}: {json.dumps(dict(result.payload), sort_keys=True)[:MAX_TEXT]}",
-                source=EvidenceSource.EXECUTOR,
-                collected_at=result.at,
-                collector=self.claim.actor.actor_id,
-            ))
-        return tuple(records)
 
     def as_dict(self) -> dict[str, Any]:
         return {
