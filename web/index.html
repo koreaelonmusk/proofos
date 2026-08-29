@@ -13,6 +13,7 @@
   <div class="nav-inner">
     <span class="brand"><span class="brand-mark" aria-hidden="true"></span>ProofOS</span>
     <div class="nav-links">
+      <a href="#demo-video">Demo</a>
       <a href="#console">Verified Run</a>
       <a href="#attack">Attack Test</a>
       <a href="#architecture">Architecture</a>
@@ -46,6 +47,38 @@
     </div>
   </div>
 </header>
+
+<!-- hosted-only:start
+     The offline single-file console is built by stripping everything between
+     these markers. That copy exists so a judge behind a blocked network still
+     sees the evidence, and a video streamed from a release server is the one
+     thing on this page that cannot honour that promise. Dropping it keeps
+     "contacts nothing at all" true rather than nearly true. -->
+<section id="demo-video" class="demo">
+  <div class="wrap">
+    <h2>Watch the 3:45 demo</h2>
+    <p class="demo-lede">A self-report refused, an independent observation accepted, and a prompt injection that compromised the model without compromising the verdict.</p>
+    <video
+      class="demo-player"
+      controls
+      preload="metadata"
+      poster="https://github.com/koreaelonmusk/proofos/releases/download/hackathon-demo-2026/00-thumbnail.png"
+      aria-describedby="demo-meta">
+      <source
+        src="https://github.com/koreaelonmusk/proofos/releases/download/hackathon-demo-2026/proofos-hackathon-final.mp4"
+        type="video/mp4">
+      <p>Your browser cannot play embedded video. The file is linked below.</p>
+    </video>
+    <p class="demo-meta" id="demo-meta">
+      3:45 &middot; 1920&times;1080 H.264 &middot; silent, with English subtitles as a separate file
+    </p>
+    <p class="demo-links">
+      <a href="https://github.com/koreaelonmusk/proofos/releases/download/hackathon-demo-2026/proofos-hackathon-final.mp4">Open the video directly (54&nbsp;MB)</a>
+      <a href="https://github.com/koreaelonmusk/proofos/releases/download/hackathon-demo-2026/proofos-demo.en.srt">English subtitles (SRT)</a>
+    </p>
+  </div>
+</section>
+<!-- hosted-only:end -->
 
 <section id="console">
   <div class="wrap">
