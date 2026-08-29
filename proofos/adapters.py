@@ -10,8 +10,8 @@ it is the only one that survives being wrong about people's intentions:
 
 * ``Claim``, ``ToolResult`` and ``AgentEvent`` have no ``source``, no
   ``trusted``, no ``independent`` and no ``verdict``. A payload that arrives
-  containing those words is kept as untrusted metadata, where it reads as what
-  it is -- something the sender wrote.
+  containing those words is kept under ``metadata["claimed_by_sender"]``, where
+  it reads as what it is -- something the sender wrote.
 * This module does not encode ``Evidence`` at all, and does not import the type.
   Turning a neutral submission into evidence is a separate, explicit step in
   ``proofos.evidence_bridge`` -- the wall between translating what a sender said
@@ -32,6 +32,34 @@ independent of the component under scrutiny, which is the only property that
 matters. An adapter that helpfully translated any of it into an observation
 would have moved the trust boundary into the translation layer, which is the
 layer least equipped to defend it.
+
+## One namespace for everything a sender asserted
+
+Every adapter -- here, GitHub, MCP, and whatever comes next -- puts sender-
+asserted trust, identity and authority in exactly one place::
+
+    metadata
+    |- transport        adapter-owned fact
+    |- adapter_id       adapter-owned fact
+    |- server_id        adapter-owned fact
+    `- claimed_by_sender
+         |- source
+         |- collector_id
+         |- trusted
+         `- ...
+
+The alternative was a naming convention -- ``claimed_source``,
+``claimed_collector_id`` -- which works until the next dangerous word arrives and
+has to be added to the convention. ``claimed_role``, ``claimed_scope``,
+``claimed_signature``: a rule that grows one entry per threat is a rule that will
+eventually be one entry short. The namespace has one rule instead, and it does
+not grow: *what the other party said goes inside, and nothing else does.*
+
+``AdapterEnvelope`` enforces it structurally rather than by convention. A
+metadata mapping carrying a top-level ``collector_id``, or a flat
+``claimed_collector_id``, is refused at construction -- so an adapter that
+forgets cannot ship, and the only key permitted to begin with ``claimed_`` is
+the namespace itself.
 
 ## Identity
 
@@ -60,11 +88,31 @@ MAX_TEXT = 16_384
 
 #: Words a payload may contain and may never mean. Kept rather than stripped:
 #: deleting them would hide what a sender tried, and the whole point is that
-#: trying is allowed and achieving is not.
+#: trying is allowed and achieving is not. The last four are identities: a party
+#: naming itself is asserting, not proving, and every transport treats that the
+#: same way.
 NON_AUTHORITATIVE_KEYS = frozenset({
     "source", "trusted", "independent", "verified", "verdict", "status",
     "proofos_status", "authority", "grant", "grants", "collector_id",
     "attestation", "signature", "confidence", "task_complete",
+    "server_id", "adapter_id", "collector", "verifier",
+})
+
+#: The one key under which everything a sender asserted is kept -- and so also
+#: the only key permitted to begin with its prefix. The prefix is derived rather
+#: than written out, so the two cannot drift apart and no second string literal
+#: in this package starts with it.
+CLAIMED_NAMESPACE = "claimed_by_sender"
+_CLAIMED_PREFIX = CLAIMED_NAMESPACE[:CLAIMED_NAMESPACE.index("_") + 1]
+
+#: Names ``metadata`` may not use at the top level, whoever is building it. Each
+#: one reads, to anything downstream, as a fact this system established -- and
+#: none of them is a fact an adapter is in a position to establish.
+#: ``server_id``, ``adapter_id``, ``framework`` and ``transport`` are absent on
+#: purpose: those come from a constructor, so an adapter may state them.
+RESERVED_METADATA_KEYS = frozenset({
+    "source", "collector_id", "trusted", "independent",
+    "authority", "verdict", "verified", "status",
 })
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,127}$")
@@ -172,10 +220,17 @@ class Claim:
 class AdapterEnvelope:
     """One normalized submission: a claim, what happened, and where it came from.
 
-    ``metadata`` holds whatever the sender said that this module refuses to act
-    on -- including the words in ``NON_AUTHORITATIVE_KEYS``. Preserved so a
-    reader can see what was attempted, namespaced so nothing downstream can
-    mistake it for a decision.
+    ``metadata`` holds two different kinds of thing and keeps them apart. At the
+    top level: facts the adapter itself established, which is a short list --
+    how the message arrived, and which constructor built the reader. Under
+    ``claimed_by_sender``: everything the other party asserted, including the
+    words in ``NON_AUTHORITATIVE_KEYS``. Preserved, so a reader can see what was
+    attempted; enclosed, so nothing downstream can mistake it for a decision.
+
+    The enclosure is checked here rather than trusted to each adapter. An
+    envelope whose metadata carries a top-level ``collector_id`` -- or a flat
+    ``claimed_collector_id``, which is the same mistake wearing a hat -- does not
+    get built.
     """
 
     claim: Claim
@@ -184,6 +239,27 @@ class AdapterEnvelope:
     adapter_id: str = ""
     transport: str = ""
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for key in self.metadata:
+            if key in RESERVED_METADATA_KEYS:
+                raise AdapterError(
+                    f"metadata may not carry a top-level {key!r}",
+                    source=self.adapter_id or "adapter", path=f"metadata.{key}",
+                    fix=f"put it in metadata[{CLAIMED_NAMESPACE!r}]. At the top "
+                        f"level it reads as something this system established, "
+                        f"and no adapter is in a position to establish it",
+                )
+            if key.startswith(_CLAIMED_PREFIX) and key != CLAIMED_NAMESPACE:
+                raise AdapterError(
+                    f"metadata may not carry a flat {key!r}",
+                    source=self.adapter_id or "adapter", path=f"metadata.{key}",
+                    fix=f"one namespace, one contract: "
+                        f"metadata[{CLAIMED_NAMESPACE!r}]"
+                        f"[{key[len(_CLAIMED_PREFIX):]!r}]. A per-key naming "
+                        f"convention needs a new entry every time a new "
+                        f"dangerous word arrives",
+                )
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -260,15 +336,24 @@ def _text(value: Any, path: str, source: str, *, required: bool = True) -> str:
     return value
 
 
-def _untrusted_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Keep what the sender said about trust, namespaced so it cannot be mistaken.
+def claimed_by_sender(*payloads: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep what the sender said about trust, enclosed so it cannot be mistaken.
 
     Not stripped. A payload that tried to declare itself verified is a thing a
     reviewer should be able to see, and hiding it would make the attempt
     invisible rather than ineffective.
+
+    Every adapter calls this, which is the point: one representation, so an
+    integrator learns the rule once. Several payloads may be passed when one
+    message nests another -- an MCP tool result and its ``structuredContent`` --
+    and later ones win, matching the order a reader would apply them in.
     """
-    claimed = {k: v for k, v in payload.items() if k in NON_AUTHORITATIVE_KEYS}
-    return {"claimed_by_sender": claimed} if claimed else {}
+    claims: dict[str, Any] = {}
+    for payload in payloads:
+        for key, value in payload.items():
+            if key in NON_AUTHORITATIVE_KEYS:
+                claims[key] = value
+    return {CLAIMED_NAMESPACE: claims} if claims else {}
 
 
 class PythonAdapter:
@@ -318,7 +403,7 @@ class PythonAdapter:
             tool_results=_tool_results(tool_results, source),
             adapter_id=self.adapter_id,
             transport=self.transport,
-            metadata=_untrusted_metadata(extra or {}),
+            metadata=claimed_by_sender(extra or {}),
         )
 
 
@@ -387,7 +472,7 @@ class HttpAdapter:
             tool_results=_tool_results(body.get("tool_results") or (), source),
             adapter_id=self.adapter_id,
             transport=self.transport,
-            metadata=_untrusted_metadata(body),
+            metadata=claimed_by_sender(body),
         )
 
 
@@ -442,6 +527,9 @@ __all__ = [
     "MAX_EVENTS",
     "MAX_TEXT",
     "NON_AUTHORITATIVE_KEYS",
+    "CLAIMED_NAMESPACE",
+    "RESERVED_METADATA_KEYS",
+    "claimed_by_sender",
     "ActorRef",
     "TaskRef",
     "Claim",

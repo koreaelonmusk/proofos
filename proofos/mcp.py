@@ -12,21 +12,24 @@ and hands them to the ordinary path. It has no verdict field, no ``verified``,
 no ``abstain``. Ask it what happened and it will tell you what a server said;
 ask it whether that is true and there is nothing to ask.
 
-## Why the claimed_ prefix
+## Where an assertion goes
 
 An arriving payload may contain ``collector_id``, ``source``, ``trusted``,
-``authority``. Those are kept, because deleting them would make an attempt
-invisible rather than ineffective. But they are kept under names that cannot be
-mistaken for the real thing:
+``authority``, and a ``server_id`` naming the server something reassuring. All
+of it is kept -- deleting it would make an attempt invisible rather than
+ineffective -- and all of it goes in one place::
 
-    collector_id  ->  claimed_collector_id
-    source        ->  claimed_source
-    trusted       ->  claimed_trusted
+    metadata["claimed_by_sender"]["collector_id"]
 
 This is not tidiness. An integrator six months from now reads
 ``metadata["collector_id"]`` and reasonably believes it is a collector identity.
-They read ``claimed_collector_id`` and cannot. The prefix does the remembering
-so nobody has to.
+Reading it out of ``claimed_by_sender`` they cannot: the path says who is
+speaking before it says what was said.
+
+The namespace is shared with every other adapter and enforced by
+``AdapterEnvelope`` rather than by this module remembering to. Nothing here
+needs its own convention, which is the property that matters -- a convention
+per adapter is how two adapters end up disagreeing about what a key means.
 
 ## What this module does not know
 
@@ -47,7 +50,6 @@ from typing import Any, Iterable, Mapping
 from .adapters import (
     MAX_EVENTS,
     MAX_TEXT,
-    NON_AUTHORITATIVE_KEYS,
     ActorRef,
     AdapterEnvelope,
     AdapterError,
@@ -55,6 +57,7 @@ from .adapters import (
     Claim,
     TaskRef,
     ToolResult,
+    claimed_by_sender,
     _number,
     _require_id,
     _text,
@@ -63,13 +66,6 @@ from .adapters import (
 #: Bumped when the shapes this module reads change incompatibly.
 MCP_SCHEMA = 1
 
-#: Words a payload may assert and may never mean, on top of the ones every
-#: transport already refuses. A server naming itself is the MCP-specific case:
-#: identity comes from the constructor, and the assertion is kept so a reviewer
-#: can see it was made.
-CLAIMED_KEYS = NON_AUTHORITATIVE_KEYS | frozenset({
-    "server_id", "adapter_id", "collector", "verifier",
-})
 
 
 class McpSurface(StrEnum):
@@ -103,20 +99,6 @@ class PromptText:
         return {"name": self.name, "text": self.text, "surface": str(self.surface)}
 
 
-def claimed(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Preserve what a payload asserted about trust, under names that say so.
-
-    Every key is prefixed. A reader scanning for ``collector_id`` finds nothing;
-    a reader who finds ``claimed_collector_id`` has been told, by the name, what
-    it is worth.
-    """
-    out: dict[str, Any] = {}
-    for key, value in payload.items():
-        if key in CLAIMED_KEYS:
-            out[f"claimed_{key}"] = value
-    return out
-
-
 def _content_text(content: Any, path: str) -> str:
     """Pull readable text out of an MCP content list."""
     if content is None:
@@ -142,7 +124,7 @@ class McpAdapter:
     """Normalize what an MCP server said.
 
     ``server_id`` comes from the constructor. A payload asking to be called
-    ``proofos-official`` gets that string preserved as ``claimed_server_id`` and
+    ``proofos-official`` gets that string kept in ``claimed_by_sender`` and
     nothing else -- the same rule the other transports use for ``adapter_id``,
     for the same reason: a party cannot choose its own identity by asserting it.
     """
@@ -189,7 +171,7 @@ class McpAdapter:
             extra={"surface": str(McpSurface.TOOL_RESULT),
                    "tool_name": tool,
                    "is_error": bool(result.get("isError", False)),
-                   **claimed(structured), **claimed(result)},
+                   **claimed_by_sender(structured, result)},
         )
 
     def normalize_resource(
@@ -222,7 +204,7 @@ class McpAdapter:
             extra={"surface": str(McpSurface.RESOURCE),
                    "resource_uri": uri,
                    "mime_type": str(resource.get("mimeType") or ""),
-                   **claimed(resource)},
+                   **claimed_by_sender(resource)},
         )
 
     # -- the surface that carries no claim at all ------------------------------
@@ -296,5 +278,4 @@ __all__ = [
     "McpSurface",
     "McpAdapter",
     "PromptText",
-    "claimed",
 ]

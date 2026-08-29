@@ -190,7 +190,7 @@
     "Gemini free tier allows 20 requests/day, which one execution largely consumes.",
     "The evidence ledger is per-execution and is not persisted, so a historical execution cannot be re-rendered through the corrected reporting path. The corrected rendering is demonstrated on live executions; the persisted audit trail is unaffected by the fix."
   ],
-  "test_count": 914,
+  "test_count": 927,
   "prior_live_gemini_cloud_execution": {
     "execution_id": "exec_134507744bce4546",
     "final_status": "VERIFIED",
@@ -494,7 +494,7 @@
     "conformance": 23,
     "plugin_trust_boundary": 9,
     "skills": 51,
-    "adapters": 43,
+    "adapters": 56,
     "generic_adapter": 33,
     "evidence_bridge": 18,
     "verify_exit_contract": 14,

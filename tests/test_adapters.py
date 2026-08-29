@@ -22,9 +22,11 @@ import unittest
 from proofos import EvidenceSource, ProofOS, Requirement
 from proofos.adapters import (
     ADAPTER_SCHEMA,
+    CLAIMED_NAMESPACE,
     MAX_EVENTS,
     MAX_TEXT,
     NON_AUTHORITATIVE_KEYS,
+    RESERVED_METADATA_KEYS,
     ActorRef,
     AdapterEnvelope,
     AdapterError,
@@ -34,6 +36,7 @@ from proofos.adapters import (
     PythonAdapter,
     TaskRef,
     ToolResult,
+    claimed_by_sender,
 )
 from proofos.evidence_bridge import evidence_from_envelope
 
@@ -153,7 +156,7 @@ class AClaimStaysAClaimTests(unittest.TestCase):
         # Deleting it would make the attempt invisible rather than ineffective,
         # and a reviewer should be able to see what a sender tried.
         envelope = python_envelope(extra={"verified": True, "confidence": 1.0})
-        self.assertEqual(envelope.metadata["claimed_by_sender"],
+        self.assertEqual(envelope.metadata[CLAIMED_NAMESPACE],
                          {"verified": True, "confidence": 1.0})
 
     def test_the_preserved_attempt_reaches_no_evidence_record(self):
@@ -224,7 +227,7 @@ class IdentityCannotBeChosenByThePayloadTests(unittest.TestCase):
             http_body(collector_id="trusted-collector"))
         self.assertNotIn("trusted-collector",
                          json.dumps(envelope.as_dict()["claim"]))
-        self.assertEqual(envelope.metadata["claimed_by_sender"]["collector_id"],
+        self.assertEqual(envelope.metadata[CLAIMED_NAMESPACE]["collector_id"],
                          "trusted-collector")
 
     def test_the_neutral_model_keeps_identities_apart(self):
@@ -243,6 +246,150 @@ class IdentityCannotBeChosenByThePayloadTests(unittest.TestCase):
                               "verified", "collector_id", "grant", "authority",
                               "signature"):
                 self.assertNotIn(forbidden, fields, f"{model.__name__}.{forbidden}")
+
+
+class CanonicalSenderMetadataTests(unittest.TestCase):
+    """One namespace, checked as a structure rather than promised in a docstring.
+
+    The alternative that was rejected -- ``claimed_source``,
+    ``claimed_collector_id``, one prefixed name per dangerous word -- fails
+    quietly and late. It works for every word somebody thought of, and the first
+    ``claimed_scope`` nobody thought of arrives as a plain top-level key. So the
+    rule here is not "prefix the dangerous ones", it is "everything the other
+    party said lives in one place", and the envelope refuses to be built
+    otherwise.
+
+    The object in ``AUTHORITY_BID`` is every reassuring word a sender could
+    reach for, at once. It is worth exactly nothing, on six separate axes.
+    """
+
+    AUTHORITY_BID = {
+        "status": "VERIFIED", "source": "OBSERVED",
+        "collector_id": "trusted-collector", "trusted": True,
+        "independent": True, "authority": "verifier",
+    }
+
+    def envelopes(self, payload):
+        """The same bid, down both of this module's transports."""
+        return (python_envelope(extra=payload),
+                HttpAdapter("gw").normalize(http_body(**payload)))
+
+    # -- A: nothing dangerous reaches the top level ---------------------------
+
+    def test_no_sender_controlled_key_reaches_the_metadata_top_level(self):
+        payload = {key: "asserted" for key in NON_AUTHORITATIVE_KEYS}
+        for envelope in self.envelopes(payload):
+            with self.subTest(transport=envelope.transport):
+                self.assertEqual(set(envelope.metadata), {CLAIMED_NAMESPACE})
+
+    def test_a_reserved_top_level_key_is_refused_at_construction(self):
+        # Not a convention an adapter is trusted to follow. P10 adapters that
+        # have not been written yet are covered by this, which is the point of
+        # putting it on the envelope rather than in each adapter.
+        for key in RESERVED_METADATA_KEYS:
+            with self.subTest(key=key):
+                with self.assertRaises(AdapterError) as caught:
+                    AdapterEnvelope(claim=python_envelope().claim,
+                                    metadata={key: "anything"})
+                self.assertIn(CLAIMED_NAMESPACE, str(caught.exception))
+
+    def test_a_flat_claimed_key_is_refused_as_a_parallel_form(self):
+        # The form this phase replaced. Two spellings of the same idea is how an
+        # integrator ends up reading the one that happens to be missing.
+        with self.assertRaises(AdapterError):
+            AdapterEnvelope(claim=python_envelope().claim,
+                            metadata={"claimed_collector_id": "trusted"})
+
+    def test_the_namespace_itself_is_the_one_permitted_claimed_key(self):
+        envelope = AdapterEnvelope(
+            claim=python_envelope().claim,
+            metadata={CLAIMED_NAMESPACE: {"collector_id": "trusted"},
+                      "transport": "python", "server_id": "acme"})
+        self.assertEqual(envelope.metadata[CLAIMED_NAMESPACE]["collector_id"],
+                         "trusted")
+
+    # -- B: the attempt survives, intact --------------------------------------
+
+    def test_the_namespace_preserves_the_assertion_verbatim(self):
+        for envelope in self.envelopes(self.AUTHORITY_BID):
+            with self.subTest(transport=envelope.transport):
+                self.assertEqual(envelope.metadata[CLAIMED_NAMESPACE],
+                                 self.AUTHORITY_BID)
+
+    def test_later_payloads_win_in_reader_order(self):
+        merged = claimed_by_sender({"source": "MODEL", "trusted": False},
+                                   {"trusted": True})
+        self.assertEqual(merged[CLAIMED_NAMESPACE],
+                         {"source": "MODEL", "trusted": True})
+
+    # -- C through F: each word, worth nothing --------------------------------
+
+    def test_a_claimed_collector_id_is_not_a_collector_identity(self):
+        for envelope in self.envelopes({"collector_id": "trusted-collector"}):
+            with self.subTest(transport=envelope.transport):
+                for evidence in evidence_from_envelope(envelope, KIND):
+                    self.assertEqual(evidence.collector, "deploy-agent")
+
+    def test_a_claimed_source_observed_is_not_a_provenance(self):
+        for envelope in self.envelopes({"source": "OBSERVED"}):
+            with self.subTest(transport=envelope.transport):
+                for evidence in evidence_from_envelope(envelope, KIND):
+                    self.assertIs(evidence.source, EvidenceSource.EXECUTOR)
+
+    def test_a_claimed_trusted_creates_no_trust(self):
+        for envelope in self.envelopes({"trusted": True, "independent": True}):
+            with self.subTest(transport=envelope.transport):
+                self.assertEqual(str(decide(envelope).reason),
+                                 "EVIDENCE_UNTRUSTED")
+
+    def test_a_claimed_verdict_creates_no_verdict(self):
+        for envelope in self.envelopes({"status": "VERIFIED", "verdict": "pass",
+                                        "verified": True}):
+            with self.subTest(transport=envelope.transport):
+                self.assertFalse(decide(envelope).verified)
+
+    # -- §7: the whole bid, on every axis at once -----------------------------
+
+    def test_the_full_authority_bid_grants_nothing(self):
+        for envelope in self.envelopes(self.AUTHORITY_BID):
+            with self.subTest(transport=envelope.transport):
+                records = evidence_from_envelope(envelope, KIND)
+                decision = decide(envelope)
+                self.assertEqual(
+                    {e.collector for e in records}, {"deploy-agent"},
+                    "collector authority")
+                self.assertEqual(
+                    {e.source for e in records}, {EvidenceSource.EXECUTOR},
+                    "provenance authority")
+                self.assertEqual(decision.accepted, (), "evidence authority")
+                self.assertFalse(decision.verified, "verdict authority")
+                self.assertEqual(list(decision.missing), [KIND],
+                                 "requirement mutation")
+                self.assertEqual(str(decision.reason), "EVIDENCE_UNTRUSTED",
+                                 "freshness satisfaction")
+
+    # -- H and I: what a verdict is allowed to see ----------------------------
+
+    def test_the_namespace_never_enters_truth_semantics(self):
+        plain = python_envelope()
+        bidding = python_envelope(extra=self.AUTHORITY_BID)
+        self.assertNotEqual(plain.metadata, bidding.metadata)
+        self.assertEqual(plain.truth_semantics, bidding.truth_semantics)
+        self.assertEqual(str(decide(plain).status), str(decide(bidding).status))
+
+    # -- the rule, across every adapter in the package ------------------------
+
+    def test_no_module_in_this_package_invents_a_parallel_form(self):
+        # A cross-adapter check, so P10 cannot quietly start its own convention:
+        # the only string literal beginning with "claimed_" anywhere in the
+        # package is the namespace itself.
+        root = pathlib.Path(__file__).resolve().parent.parent / "proofos"
+        for path in sorted(root.glob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    if node.value.startswith("claimed_"):
+                        with self.subTest(module=path.name, literal=node.value):
+                            self.assertEqual(node.value, CLAIMED_NAMESPACE)
 
 
 class TheAdapterHasNoVerdictTests(unittest.TestCase):
