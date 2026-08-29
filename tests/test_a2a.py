@@ -23,6 +23,7 @@ from proofos.a2a import (
     TaskState,
 )
 from proofos.adapters import CLAIMED_NAMESPACE, RESERVED_METADATA_KEYS, AdapterError
+from proofos.evidence_bridge import evidence_from_envelope
 
 MODULE = pathlib.Path(__file__).resolve().parent.parent / "proofos" / "a2a.py"
 NOW = 1_700_000_000.0
@@ -48,7 +49,7 @@ def task(**overrides) -> dict:
 def decide(envelope, records=None):
     return ProofOS().verify(envelope.claim.text, REQS,
                             records if records is not None
-                            else envelope.as_evidence(KIND), now=NOW)
+                            else evidence_from_envelope(envelope, KIND), now=NOW)
 
 
 class NormalizationWorksTests(unittest.TestCase):
@@ -184,7 +185,7 @@ class NamesAndSignaturesDoNotCreateTrustTests(unittest.TestCase):
         envelope = adapter().normalize_task(
             task(agent={"id": "trusted-collector"},
                  collector_id="trusted-collector"), at=NOW)
-        for evidence in envelope.as_evidence(KIND):
+        for evidence in evidence_from_envelope(envelope, KIND):
             self.assertEqual(evidence.collector, "trusted-collector")
             self.assertIs(evidence.source, EvidenceSource.EXECUTOR)
         self.assertFalse(decide(envelope).verified)
@@ -196,7 +197,7 @@ class NamesAndSignaturesDoNotCreateTrustTests(unittest.TestCase):
         envelope = adapter().normalize_task(
             task(signature="ed25519:...", attestation={"iss": "google"},
                  authenticated=True), at=NOW)
-        for evidence in envelope.as_evidence(KIND):
+        for evidence in evidence_from_envelope(envelope, KIND):
             self.assertIs(evidence.source, EvidenceSource.EXECUTOR)
         self.assertEqual(str(decide(envelope).reason), "EVIDENCE_UNTRUSTED")
 
@@ -242,7 +243,7 @@ class DelegationIsNotCorroborationTests(unittest.TestCase):
                 task(agent={"id": name},
                      message={"parts": [{"kind": "text", "text": STATEMENT}]}),
                 at=NOW)
-            records.extend(envelope.as_evidence(KIND))
+            records.extend(evidence_from_envelope(envelope, KIND))
         self.assertEqual(len(records), 3)
 
         decision = ProofOS().verify(STATEMENT, REQS, tuple(records), now=NOW)
@@ -288,7 +289,7 @@ class TheCanonicalNamespaceHoldsTests(unittest.TestCase):
 
     def test_the_full_bid_grants_nothing(self):
         envelope = adapter().normalize_task(task(**self.BID), at=NOW)
-        records = envelope.as_evidence(KIND)
+        records = evidence_from_envelope(envelope, KIND)
         decision = decide(envelope, records)
         self.assertEqual({e.collector for e in records}, {"remote-agent"})
         self.assertEqual({e.source for e in records}, {EvidenceSource.EXECUTOR})

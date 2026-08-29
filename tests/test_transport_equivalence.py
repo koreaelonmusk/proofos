@@ -31,6 +31,7 @@ from proofos.a2a import A2aAdapter
 from proofos.adapters import ADAPTER_SCHEMA, CLAIMED_NAMESPACE, HttpAdapter, PythonAdapter
 from proofos.adk import AdkAdapter
 from proofos.mcp import McpAdapter
+from proofos.evidence_bridge import evidence_from_envelope
 
 NOW = 1_700_000_000.0
 KIND = "task_outcome"
@@ -81,7 +82,7 @@ def same_statement(**bid) -> dict:
 
 def verdict(envelope):
     decision = ProofOS().verify(envelope.claim.text, REQS,
-                                envelope.as_evidence(KIND), now=NOW)
+                                evidence_from_envelope(envelope, KIND), now=NOW)
     return (str(decision.status), str(decision.reason)), decision
 
 

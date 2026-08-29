@@ -16,6 +16,7 @@ import unittest
 from proofos import EvidenceSource, ProofOS, Requirement
 from proofos.adapters import CLAIMED_NAMESPACE, RESERVED_METADATA_KEYS, AdapterError
 from proofos.adk import ADK_SCHEMA, AdkAdapter, AdkSurface
+from proofos.evidence_bridge import evidence_from_envelope
 
 MODULE = pathlib.Path(__file__).resolve().parent.parent / "proofos" / "adk.py"
 NOW = 1_700_000_000.0
@@ -46,7 +47,7 @@ def result(**overrides) -> dict:
 def decide(envelope, records=None):
     return ProofOS().verify(envelope.claim.text, REQS,
                             records if records is not None
-                            else envelope.as_evidence(KIND), now=NOW)
+                            else evidence_from_envelope(envelope, KIND), now=NOW)
 
 
 class NormalizationWorksTests(unittest.TestCase):
@@ -165,7 +166,7 @@ class AToolResultIsNotAnObservationTests(unittest.TestCase):
     def test_tool_evidence_is_attributed_to_the_agent_that_ran_it(self):
         envelope = adapter().normalize_result(result(tool_results=[self.HEALTHY]),
                                               task_id="TASK-Y", at=NOW)
-        for evidence in envelope.as_evidence(KIND):
+        for evidence in evidence_from_envelope(envelope, KIND):
             self.assertEqual(evidence.collector, "deploy-agent")
             self.assertIs(evidence.source, EvidenceSource.EXECUTOR)
 
@@ -238,7 +239,7 @@ class TheCanonicalNamespaceHoldsTests(unittest.TestCase):
     def test_the_full_bid_grants_nothing(self):
         envelope = adapter().normalize_result(result(**self.BID),
                                               task_id="TASK-Y", at=NOW)
-        records = envelope.as_evidence(KIND)
+        records = evidence_from_envelope(envelope, KIND)
         decision = decide(envelope, records)
         self.assertEqual({e.collector for e in records}, {"deploy-agent"})
         self.assertEqual({e.source for e in records}, {EvidenceSource.EXECUTOR})
