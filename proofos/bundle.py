@@ -50,7 +50,7 @@ comparing.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
 from .integrity import canonical_payload, content_hash
@@ -67,6 +67,7 @@ BUNDLE_KIND = "proofos.proof-bundle.v1"
 MAX_VALUE = 8_192
 MAX_EVIDENCE = 4_096
 MAX_REQUIREMENTS = 256
+MAX_ENVELOPE_FIELDS = 32
 MAX_TEXT = 16_384
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,127}$")
@@ -153,6 +154,12 @@ class EvidenceRecord:
     #: check a signature without an optional dependency, and carrying a
     #: signature nobody verifies is decoration that reads as assurance.
     attestation_ref: str = ""
+    #: The signed envelope, exactly as ``proofos.attestation`` defines it, or
+    #: an empty mapping. Carried opaquely: this module does not know the
+    #: attestation schema and must not learn it, because parsing a signed
+    #: payload in two places is how the two parsings come to disagree.
+    #: ``proofos.portable_attestation`` does the strict parse when it verifies.
+    attestation: Mapping[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -164,6 +171,7 @@ class EvidenceRecord:
             "collector": self.collector,
             "content_hash": self.content_hash,
             "attestation_ref": self.attestation_ref,
+            "attestation": dict(self.attestation),
         }
 
     def recompute_hash(self) -> str:
@@ -171,7 +179,10 @@ class EvidenceRecord:
 
         Deliberately the same field set and the same canonicalization the kernel
         uses, so a record whose value was edited in transit fails here for the
-        same reason it would fail there.
+        same reason it would fail there. ``attestation`` is absent for that
+        reason: adding it would make this digest disagree with the kernel's over
+        the same record. The envelope is covered by the bundle digest instead,
+        and by its own signature -- three layers, none substituting for another.
         """
         return content_hash({
             "kind": self.kind,
@@ -287,6 +298,7 @@ def export_bundle(
     recorded_verdict: str = "",
     recorded_reason: str = "",
     attestation_refs: Mapping[str, str] | None = None,
+    attestations: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> ProofBundle:
     """Serialize one decision into a portable bundle.
 
@@ -297,6 +309,7 @@ def export_bundle(
     """
     claim_text = _text(claim, "claim", required=True)
     refs = dict(attestation_refs or {})
+    envelopes = dict(attestations or {})
 
     required: list[RequirementRecord] = []
     for index, item in enumerate(requirements):
@@ -338,6 +351,8 @@ def export_bundle(
                                f"{path}.content_hash", required=True),
             attestation_ref=_text(refs.get(getattr(item, "content_hash", ""), ""),
                                   f"{path}.attestation_ref", required=False),
+            attestation=_envelope(envelopes.get(getattr(item, "content_hash", "")),
+                                  f"{path}.attestation"),
         )
         if not record.intact:
             raise BundleError(
@@ -540,7 +555,7 @@ _REQUIREMENT_FIELDS: tuple[str, ...] = ("kind", "max_age_seconds")
 
 _EVIDENCE_FIELDS: tuple[str, ...] = (
     "kind", "value", "source", "valid", "collected_at", "collector",
-    "content_hash", "attestation_ref",
+    "content_hash", "attestation_ref", "attestation",
 )
 
 
@@ -572,7 +587,40 @@ def _evidence(item: Any, path: str) -> EvidenceRecord:
                            required=True),
         attestation_ref=_text(item["attestation_ref"], f"{path}.attestation_ref",
                               required=False),
+        attestation=_envelope(item["attestation"], f"{path}.attestation"),
     )
+
+
+def _envelope(value: Any, path: str) -> Mapping[str, Any]:
+    """Read a signed envelope as opaque, bounded, flat data.
+
+    Deliberately no field names. This module does not know the attestation
+    schema and must not learn it: a signed payload parsed in two places is a
+    signed payload that will one day be parsed two ways. What is enforced here
+    is only what a serializer can honestly enforce -- that it is a flat object
+    of scalars, bounded, with no private key hiding in it. The strict parse
+    happens in ``proofos.portable_attestation``, against the signature.
+    """
+    if value is None or value == {}:
+        return {}
+    if not isinstance(value, Mapping):
+        raise BundleError("must be an object", path=path)
+    if len(value) > MAX_ENVELOPE_FIELDS:
+        raise BundleError(f"more than {MAX_ENVELOPE_FIELDS} fields", path=path)
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise BundleError("field names must be strings", path=path)
+        if isinstance(item, (Mapping, list, tuple)):
+            raise BundleError(
+                "an attestation envelope is flat", path=f"{path}.{key}",
+                fix="the signed contract is a flat set of scalars. Nesting is "
+                    "somewhere to hide a field the signature never covered")
+        if isinstance(item, str) and len(item) > MAX_VALUE:
+            raise BundleError(f"longer than {MAX_VALUE} characters",
+                              path=f"{path}.{key}")
+        out[key] = item
+    return out
 
 
 def _strict(item: Any, fields: tuple[str, ...], path: str) -> None:
