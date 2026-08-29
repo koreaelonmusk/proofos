@@ -222,7 +222,7 @@ verification you cannot rely on.
 | Field | Value |
 |---|---|
 | Repository | https://github.com/koreaelonmusk/proofos |
-| Hosted judge console | `TODO` — pending GitHub Pages publication from `main` |
+| Hosted judge console | https://koreaelonmusk.github.io/proofos/ |
 | Demo video | `TODO` — pending public YouTube/Vimeo upload |
 
 The video must be ≤ 4 minutes, in English or with English subtitles, and must
