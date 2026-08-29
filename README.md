@@ -7,6 +7,11 @@ system accepts it.
 
 *Google All Things Agentic Hackathon 2026 — track: Fortified Enterprise Fleet*
 
+**[Open the evidence console →](https://koreaelonmusk.github.io/proofos/)**
+It replays a recorded Cloud Run execution: a self-report refused, an
+independent observation accepted, and the hash-chained journal behind both.
+No install, no sign-in.
+
 ```mermaid
 flowchart TD
     A["Agent claims success"] --> B["ABSTAIN<br/>self-report rejected"]
