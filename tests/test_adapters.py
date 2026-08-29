@@ -35,6 +35,7 @@ from proofos.adapters import (
     TaskRef,
     ToolResult,
 )
+from proofos.evidence_bridge import evidence_from_envelope
 
 MODULE = pathlib.Path(__file__).resolve().parent.parent / "proofos" / "adapters.py"
 NOW = 1_700_000_000.0
@@ -66,7 +67,7 @@ def python_envelope(adapter=None, **overrides):
 
 def decide(envelope):
     return ProofOS().verify("Task complete.", REQS,
-                            envelope.as_evidence(KIND), now=NOW)
+                            evidence_from_envelope(envelope, KIND), now=NOW)
 
 
 class NormalizationWorksTests(unittest.TestCase):
@@ -110,8 +111,8 @@ class TransportDoesNotChangeTruthTests(unittest.TestCase):
             self.assertNotIn(excluded, self.python.truth_semantics)
 
     def test_both_produce_the_same_evidence_provenance(self):
-        self.assertEqual([e.source for e in self.python.as_evidence(KIND)],
-                         [e.source for e in self.http.as_evidence(KIND)])
+        self.assertEqual([e.source for e in evidence_from_envelope(self.python, KIND)],
+                         [e.source for e in evidence_from_envelope(self.http, KIND)])
 
     def test_both_reach_the_same_verdict(self):
         a, b = decide(self.python), decide(self.http)
@@ -157,7 +158,7 @@ class AClaimStaysAClaimTests(unittest.TestCase):
 
     def test_the_preserved_attempt_reaches_no_evidence_record(self):
         envelope = python_envelope(extra={"source": "OBSERVED", "trusted": True})
-        for evidence in envelope.as_evidence(KIND):
+        for evidence in evidence_from_envelope(envelope, KIND):
             self.assertIsNot(evidence.source, EvidenceSource.OBSERVED)
 
     def test_the_reason_is_provenance_not_absence(self):
@@ -188,7 +189,7 @@ class ToolOutputIsNotIndependentTests(unittest.TestCase):
         # third party.
         envelope = python_envelope(tool_results=[{
             "tool": "http_get", "payload": {"status": 200}}])
-        for evidence in envelope.as_evidence(KIND):
+        for evidence in evidence_from_envelope(envelope, KIND):
             self.assertEqual(evidence.collector, "deploy-agent")
 
 
@@ -280,9 +281,9 @@ class TheAdapterHasNoVerdictTests(unittest.TestCase):
                 self.assertEqual(present & trust_words, set())
 
     def test_the_module_never_names_the_trusted_provenance(self):
-        # Not a rejected branch -- an absent one. There is no path through
-        # as_evidence that produces OBSERVED, because the constant does not
-        # appear in the file.
+        # Not a rejected branch -- an absent one. This module encodes no
+        # evidence at all (that moved to the bridge), and the OBSERVED constant
+        # does not appear in the file.
         source = MODULE.read_text(encoding="utf-8")
         tree = ast.parse(source)
         for node in ast.walk(tree):
@@ -398,8 +399,8 @@ class AuthenticationIsNotIndependenceTests(unittest.TestCase):
     def test_arriving_over_http_grants_nothing(self):
         over_http = HttpAdapter("gw").normalize(http_body())
         in_process = python_envelope()
-        self.assertEqual([e.source for e in over_http.as_evidence(KIND)],
-                         [e.source for e in in_process.as_evidence(KIND)])
+        self.assertEqual([e.source for e in evidence_from_envelope(over_http, KIND)],
+                         [e.source for e in evidence_from_envelope(in_process, KIND)])
 
     def test_an_authenticated_sender_is_still_the_component_under_scrutiny(self):
         # There is no field for "this caller was authenticated" because it would
