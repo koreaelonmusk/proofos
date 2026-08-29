@@ -103,7 +103,15 @@ class CollectorPlugin(Protocol):
         ...
 
 
-class Severity(StrEnum):
+class FindingSeverity(StrEnum):
+    """How much a conformance finding matters.
+
+    Named for what it is rather than the shorter ``Severity``, because
+    ``proofos.journal`` already has a ``Severity`` that means something else.
+    Two public types with one name is a question a reader should never have to
+    ask, and the root export can only ever point at one of them.
+    """
+
     FAIL = "FAIL"
     WARN = "WARN"
     INFO = "INFO"
@@ -111,7 +119,7 @@ class Severity(StrEnum):
 
 @dataclass(frozen=True)
 class Finding:
-    severity: Severity
+    severity: FindingSeverity
     check: str
     detail: str
 
@@ -129,7 +137,7 @@ class ConformanceReport:
 
     @property
     def conformant(self) -> bool:
-        return not any(f.severity is Severity.FAIL for f in self.findings)
+        return not any(f.severity is FindingSeverity.FAIL for f in self.findings)
 
     def render(self) -> str:
         lines = [f"{self.plugin_id}: "
@@ -183,7 +191,7 @@ class _SocketWatcher:
 
 
 def _fail(check: str, detail: str) -> Finding:
-    return Finding(Severity.FAIL, check, detail)
+    return Finding(FindingSeverity.FAIL, check, detail)
 
 
 def check_manifest(manifest: PluginManifest) -> list[Finding]:
@@ -201,7 +209,7 @@ def check_manifest(manifest: PluginManifest) -> list[Finding]:
                               "matched to a requirement"))
     if not manifest.is_pinned:
         findings.append(Finding(
-            Severity.WARN, "pinning",
+            FindingSeverity.WARN, "pinning",
             "no source_commit or digest; a version tag can move, so what runs "
             "tomorrow is not necessarily what was reviewed today",
         ))
@@ -333,3 +341,22 @@ def check_plugin(plugin: CollectorPlugin, *,
         checks_run=tuple(checks),
         not_checked=NOT_CHECKED,
     )
+
+
+#: Tier 2, for the same reason as ``proofos.plugins``: a plugin author runs this
+#: suite, and nobody else needs to name its types.
+__all__ = [
+    "Observation",
+    "ObservationOutcome",
+    "ObservationRequest",
+    "CollectorPlugin",
+    "Finding",
+    "FindingSeverity",
+    "ConformanceReport",
+    "check_plugin",
+    "check_manifest",
+    "check_observation_shape",
+    "check_fails_closed",
+    "check_network_scope",
+    "NOT_CHECKED",
+]

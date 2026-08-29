@@ -27,7 +27,7 @@ from proofos.conformance import (  # noqa: E402
     Observation,
     ObservationOutcome,
     ObservationRequest,
-    Severity,
+    FindingSeverity,
     check_plugin,
 )
 from proofos.plugins import PLUGIN_SCHEMA, parse_manifest  # noqa: E402
@@ -49,7 +49,7 @@ BASE = {
 
 
 def failures(report) -> list[str]:
-    return [f.check for f in report.findings if f.severity is Severity.FAIL]
+    return [f.check for f in report.findings if f.severity is FindingSeverity.FAIL]
 
 
 class TheReferencePluginsConformTests(unittest.TestCase):

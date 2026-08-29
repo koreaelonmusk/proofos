@@ -440,3 +440,19 @@ def load_manifest(path: str | pathlib.Path) -> PluginManifest:
             fix="use .toml or .json",
         )
     return parse_manifest(data, source=str(path))
+
+
+#: Tier 2. Public and documented, imported from ``proofos.plugins`` rather than
+#: from the package root. A plugin author needs these; someone verifying a claim
+#: does not, and the root API is for the second person.
+__all__ = [
+    "PLUGIN_SCHEMA",
+    "PluginKind",
+    "Permission",
+    "PluginManifest",
+    "PluginError",
+    "parse_manifest",
+    "load_manifest",
+    "REFUSED_PERMISSIONS",
+    "FLOATING_REFERENCES",
+]
