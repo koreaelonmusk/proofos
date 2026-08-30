@@ -38,12 +38,28 @@ class TheDesignDoesNotClaimToBeAppliedTests(unittest.TestCase):
         self.assertIn("STATUS: DESIGNED, NOT APPLIED", text)
         self.assertIn("REMOTE ADMIN MUTATION: 0", text)
 
-    def test_the_design_records_the_enforcement_state_as_negative(self):
+    def test_the_design_records_that_this_work_changed_nothing(self):
         text = read(DESIGN).lower()
-        for line in ("ruleset created    no", "ruleset enabled    no",
-                     "ruleset applied    no"):
+        for line in ("ruleset created by this work     no",
+                     "ruleset enabled by this work     no",
+                     "ruleset modified by this work    no"):
             self.assertIn(line, text,
-                          "the design must state that nothing is enforcing")
+                          "the design must state that this work applied nothing")
+
+    def test_the_design_records_the_pre_existing_ruleset(self):
+        """`main` IS protected, by a ruleset the classic API does not report.
+
+        An earlier reading concluded main was unprotected because
+        /branches/main/protection returns 404. That endpoint only sees classic
+        branch protection. This test exists so the document cannot drift back
+        to claiming an absence that was never real.
+        """
+        text = read(DESIGN)
+        self.assertIn("21147240", text, "the observed ruleset id must be recorded")
+        self.assertIn("Correction", text)
+        for rule in ("deletion", "non_fast_forward", "required_linear_history",
+                     "required_status_checks"):
+            self.assertIn(rule, text, f"observed rule {rule} is not recorded")
 
     def test_no_ruleset_identifier_is_committed(self):
         """A ruleset id would be evidence of a ruleset that exists remotely."""
