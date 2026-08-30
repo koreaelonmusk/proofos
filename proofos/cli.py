@@ -354,6 +354,29 @@ CLI_COLLECTOR = "proofos-cli"
 _VERIFY_TASK = "cli-verify"
 
 
+#: Exactly the keys an observation may carry, per check. Anything else is
+#: refused rather than dropped.
+#:
+#: The reason is the whole argument of this project pointed at its own input
+#: parser. A user who writes ``"sha256": "<expected>"`` beside a digest check
+#: has stated a condition. This build does not implement digest pinning, so the
+#: key meant nothing -- and it was being discarded in silence, leaving exit 0
+#: and a reasonable belief that the digest had been compared. A verification
+#: tool that answers "satisfied" to a requirement it never read is doing the
+#: precise thing it exists to refuse:
+#:
+#:     IGNORED REQUIREMENT IS NOT SATISFIED REQUIREMENT
+#:
+#: Every other parser here already refuses unknown fields -- the attestation
+#: envelope, the proof bundle, the bundle's evidence records. This one now does
+#: too. If digest pinning is wanted it is a feature, and a feature arrives with
+#: a comparison and a test, not by a key being tolerated.
+OBSERVATION_KEYS: dict[str, frozenset[str]] = {
+    "http": frozenset({"kind", "check", "url", "timeout"}),
+    "digest": frozenset({"kind", "check", "path"}),
+}
+
+
 class _VerifyUsage(ValueError):
     """A malformed instruction in the input file."""
 
@@ -390,6 +413,19 @@ def _observe(spec, index: int) -> tuple[str, str, bool]:
         raise _VerifyUsage(f"{path}.kind is missing")
     check = spec.get("check")
 
+    allowed = OBSERVATION_KEYS.get(check if isinstance(check, str) else None)
+    if allowed is None:
+        raise _VerifyUsage(
+            f"{path}.check is {check!r}; this build can perform "
+            f"{' or '.join(repr(name) for name in sorted(OBSERVATION_KEYS))}")
+    unknown = sorted(set(spec) - allowed)
+    if unknown:
+        raise _VerifyUsage(
+            f"{path} carries {unknown}, which a {check!r} check does not read. "
+            f"It understands {sorted(allowed)}. A key this build ignores is a "
+            f"condition you asked for and did not get, so it is refused rather "
+            f"than dropped")
+
     if check == "http":
         url = spec.get("url")
         if not isinstance(url, str) or not url.strip():
@@ -410,8 +446,8 @@ def _observe(spec, index: int) -> tuple[str, str, bool]:
             raise _Unavailable(kind, f"could not read {target}: {type(exc).__name__}") from None
         return kind, f"sha256 {hashlib.sha256(data).hexdigest()}", True
 
-    raise _VerifyUsage(
-        f"{path}.check is {check!r}; this build can perform 'http' or 'digest'")
+    # Unreachable: OBSERVATION_KEYS decided which checks exist, above.
+    raise _VerifyUsage(f"{path}.check {check!r} has no implementation")
 
 
 def cmd_verify(args, out) -> int:

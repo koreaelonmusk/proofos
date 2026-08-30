@@ -228,6 +228,12 @@ MUTATIONS: tuple[tuple[str, str, str, str, str, str], ...] = (
      "    refuse_sensitive_content(draft)",
      "    pass"),
 
+    # -- V. the CLI input boundary --------------------------------------------
+    ("V1", "the CLI drops a condition the user asked for",
+     "proofos/cli.py", "tests.test_verify_exit_contract",
+     '    unknown = sorted(set(spec) - allowed)\n    if unknown:',
+     '    unknown = sorted(set(spec) - allowed)\n    if unknown and False:'),
+
     # -- E. the aggregation that reports all of the above ----------------------
     ("G1", "a gate that never ran counts as green",
      "scripts/release_gate.py", "tests.test_release_gate",

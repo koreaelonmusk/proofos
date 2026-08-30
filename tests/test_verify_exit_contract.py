@@ -251,3 +251,139 @@ class TheCliCollectorIsBoundedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def run_verify_capturing_stderr(path):
+    """The suite's own runner, plus the stream the refusals are written to."""
+    errors = io.StringIO()
+    with contextlib.redirect_stderr(errors):
+        code, out = run(["verify", str(path)])
+    return code, out, errors.getvalue()
+
+
+class TheObservationSpecIsStrictTests(unittest.TestCase):
+    """C1-C8. A key this build does not read is refused, not dropped.
+
+    The defect this closes reached a release candidate. An observation could
+    carry ``"sha256": "<expected>"`` beside a digest check; the key was silently
+    discarded, the file was hashed, the observation was recorded, and the
+    command exited 0. Nothing untrusted became trusted -- the CLI really did
+    look at the file -- but a user who had written a condition was told it was
+    satisfied without it ever being read.
+
+        IGNORED REQUIREMENT IS NOT SATISFIED REQUIREMENT
+
+    Digest pinning is a feature and is still not implemented. What changed is
+    that asking for it now fails loudly instead of quietly.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.tmp = pathlib.Path(self.dir.name)
+        self.artifact = self.tmp / "artifact.bin"
+        self.artifact.write_bytes(b"hello proofos")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def spec(self, **overrides):
+        base = {"kind": "artifact", "check": "digest", "path": str(self.artifact)}
+        base.update(overrides)
+        return base
+
+    def document(self, spec, **extra):
+        return {"claim": "The artifact was produced.",
+                "requirements": [{"kind": "artifact"}],
+                "observations": [spec], **extra}
+
+    def verify(self, document):
+        path = self.tmp / "input.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        return run_verify_capturing_stderr(path)
+
+    # -- C1: the supported schema still works ---------------------------------
+
+    def test_c1_the_exact_schema_is_accepted(self):
+        code, out, _ = self.verify(self.document(self.spec()))
+        self.assertEqual(code, EXIT_VERIFIED)
+        self.assertIn("VERIFIED", out)
+
+    def test_c1_each_check_declares_its_own_keys(self):
+        from proofos.cli import OBSERVATION_KEYS
+
+        self.assertEqual(OBSERVATION_KEYS["http"],
+                         frozenset({"kind", "check", "url", "timeout"}))
+        self.assertEqual(OBSERVATION_KEYS["digest"],
+                         frozenset({"kind", "check", "path"}))
+
+    # -- C2, C3, C4: anything unread is refused --------------------------------
+
+    def test_c2_an_expected_digest_is_refused_rather_than_ignored(self):
+        code, _, err = self.verify(self.document(self.spec(sha256="0" * 64)))
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("sha256", err)
+        self.assertIn("does not read", err)
+
+    def test_c3_an_arbitrary_unknown_key_is_refused(self):
+        code, _, err = self.verify(
+            self.document(self.spec(whatever={"nested": True})))
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("whatever", err)
+
+    def test_c4_a_typo_is_named_rather_than_reported_as_missing(self):
+        # `paths` instead of `path`. This used to surface as "path is missing",
+        # which sends the reader looking for the wrong problem.
+        code, _, err = self.verify(
+            self.document({"kind": "artifact", "check": "digest",
+                           "paths": str(self.artifact)}))
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("paths", err)
+
+    def test_c4_a_key_belonging_to_the_other_check_is_refused(self):
+        code, _, err = self.verify(self.document(self.spec(url="http://x")))
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("url", err)
+
+    # -- C5, C6: the outcomes that were always right stay right -----------------
+
+    def test_c5_a_real_direct_observation_still_verifies(self):
+        code, out, _ = self.verify(self.document(self.spec()))
+        self.assertEqual(code, EXIT_VERIFIED)
+        self.assertIn("OBSERVED", out)
+
+    def test_c6_a_self_report_still_abstains(self):
+        code, out, _ = self.verify({
+            "claim": "The artifact was produced.",
+            "requirements": [{"kind": "artifact"}],
+            "evidence": [{"kind": "artifact", "value": "I made it",
+                          "source": "EXECUTOR"}]})
+        self.assertEqual(code, EXIT_ABSTAIN)
+        self.assertIn("ABSTAIN", out)
+
+    # -- C7, C8: malformed and operational stay distinct ------------------------
+
+    def test_c7_an_unknown_check_is_refused_and_names_what_exists(self):
+        code, _, err = self.verify(
+            self.document({"kind": "artifact", "check": "telepathy"}))
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("digest", err)
+        self.assertIn("http", err)
+
+    def test_c7_a_missing_check_is_refused(self):
+        code, _, _ = self.verify(
+            self.document({"kind": "artifact", "path": str(self.artifact)}))
+        self.assertEqual(code, EXIT_USAGE)
+
+    def test_c8_an_unreadable_target_is_not_a_usage_error(self):
+        # A check that could not be carried out is not a malformed instruction.
+        # Conflating them tells an operator to edit a file that is correct.
+        code, _, _ = self.verify(
+            self.document(self.spec(path=str(self.tmp / "absent.bin"))))
+        self.assertEqual(code, EXIT_ABSTAIN)
+
+    def test_the_refusal_names_what_it_would_have_accepted(self):
+        # A refusal that does not say what is allowed sends the reader to the
+        # source. This one carries the whole permitted set.
+        _, _, err = self.verify(self.document(self.spec(sha256="0" * 64)))
+        for key in ("check", "kind", "path"):
+            self.assertIn(key, err)
