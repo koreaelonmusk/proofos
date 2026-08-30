@@ -11,19 +11,28 @@ that did not run counted as green, and one failing gate lost inside a summary.
 
 from __future__ import annotations
 
-import importlib.util
 import pathlib
+import types
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def load_runner():
-    """Import scripts/release_gate.py without making scripts/ a package."""
-    spec = importlib.util.spec_from_file_location(
-        "release_gate", ROOT / "scripts" / "release_gate.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    """Compile scripts/release_gate.py from source, every time.
+
+    Deliberately not spec_from_file_location + exec_module, which consults
+    __pycache__. The security gate mutates this file and restores it, and one
+    of its mutations -- None to True -- leaves the byte count unchanged. If the
+    mutate/test/restore cycle finishes inside a single second, the cached
+    bytecode matches the restored source on both mtime and size, Python treats
+    it as current, and the suite runs the mutated bytecode against unmutated
+    source. The failure that produces points at the wrong file entirely.
+    """
+    source = (ROOT / "scripts" / "release_gate.py").read_text(encoding="utf-8")
+    module = types.ModuleType("release_gate")
+    module.__file__ = str(ROOT / "scripts" / "release_gate.py")
+    exec(compile(source, module.__file__, "exec"), module.__dict__)
     return module
 
 

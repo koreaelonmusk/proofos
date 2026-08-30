@@ -294,6 +294,13 @@ def apply(identifier: str, description: str, relative: str, target: str,
     # A sidecar copy, so a run killed between the write and the restore leaves
     # an obvious artefact and an automatic repair rather than silent damage.
     sidecar = path.with_suffix(path.suffix + ".mutation-backup")
+    # Any bytecode compiled from the mutated source has to go with it. A
+    # mutation that leaves the byte count unchanged -- None to True, say -- and
+    # a cycle that completes inside one second produce a cached .pyc that
+    # matches the *restored* source on both mtime and size. Python then treats
+    # it as current and later runs mutated bytecode against clean source.
+    caches = [c for c in ROOT.rglob("__pycache__") if c.is_dir()]
+
     try:
         sidecar.write_bytes(original)
         path.write_bytes(mutated.encode("utf-8"))
@@ -310,6 +317,10 @@ def apply(identifier: str, description: str, relative: str, target: str,
     finally:
         path.write_bytes(original)
         sidecar.unlink(missing_ok=True)
+        stem = path.stem
+        for cache in caches:
+            for compiled in cache.glob(f"{stem}.*.pyc"):
+                compiled.unlink(missing_ok=True)
 
 
 def repair_from_sidecars() -> list[str]:
