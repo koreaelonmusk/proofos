@@ -1,0 +1,71 @@
+# The release gates, run on every platform this package claims to support.
+#
+# This workflow is deliberately thin. Every check it performs lives in
+# scripts/release_gate.py and can be run by hand on any machine -- a CI file is
+# a claim that a check happens, and a claim is the thing this project exists to
+# distinguish from the check itself. What CI adds is not the checking; it is the
+# platforms and interpreters a laptop does not have.
+#
+# The existing ci.yml is a different job: it wires the deployable services, the
+# ADK agents and the container images, and it needs the full dependency set.
+# This one is about what a user installs, so it installs as little as it can.
+name: Release gate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    # Every combination the package declares support for. requires-python is
+    # ">=3.11" and the classifiers name 3.11 and 3.12; 3.10 is not on this list
+    # because it cannot be -- the codebase uses enum.StrEnum and tomllib, both
+    # 3.11. A matrix entry for an interpreter the package cannot run on would
+    # be a red job that everyone learns to ignore.
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # The suite exercises the deployable services and the ADK wiring, so it
+      # needs the development set. The gates that matter for packaging then
+      # build and install into their own fresh interpreter, which is what keeps
+      # "the wheel needs nothing" an observation rather than an assumption.
+      - name: Install the development dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt build
+
+      - name: Run the release gates
+        run: python scripts/release_gate.py all
+
+      # A gate that leaves artefacts behind would make the next run depend on
+      # this one. The script cleans up after itself; this proves it did.
+      - name: The gates must leave the tree clean
+        run: git diff --exit-code
+
+  # Exploratory, and it says so. 3.13 is not in the package classifiers, so a
+  # failure here is information about a version this project does not yet claim
+  # to support -- not a broken build. It becomes blocking on the day the
+  # classifier is added, and not before: a green tick for a version nobody
+  # promised is how an unsupported version quietly becomes supported.
+  gate-next:
+    name: ubuntu / py3.13 (not claimed, advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --disable-pip-version-check -r requirements.txt build
+      - run: python scripts/release_gate.py all
