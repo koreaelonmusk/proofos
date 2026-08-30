@@ -3,6 +3,47 @@
 Two services, three authorities, one invariant: no claim of completion without
 independent evidence.
 
+This page describes the deployed system. The normative contracts live beside it:
+
+| Document | Answers |
+|---|---|
+| [Trust boundaries](trust-boundary.md) | who may do what, and the transport authority matrix |
+| [Evidence lifecycle](evidence-lifecycle.md) | what `VERIFIED` and `ABSTAIN` mean, and where authority first appears |
+| [Proof bundles](proof-bundles.md) | portable proof and offline replay |
+| [Signed attestations](attestations.md) | what a signature proves, and what it does not |
+| [Threat model](threat-model.md) | attacks, responses, and the test enforcing each |
+| [Integration guide](integrations.md) | the two paths to the verifier, and the patterns to avoid |
+| [Operator runbook](operator-runbook.md) | requirements, collectors, replay, and every failure code |
+| [Repository governance](governance.md) | lease and worktree discipline for concurrent writers |
+
+## What ProofOS does not prove
+
+Listed first, because a system that only advertises its wins is marketing.
+
+- **That an agent is honest.** ProofOS never forms a view about an actor. It
+  asks whether independent evidence satisfies declared requirements.
+- **That a model is correct.** Model compliance is not a security boundary.
+  A verifier model that ignores its tools produces `ABSTAIN`, not a verdict.
+- **World truth in the absence of evidence.** `ABSTAIN` means nothing was shown,
+  not that the task failed. A perfectly healthy service abstains if nobody
+  independent looked.
+- **Current truth from a historical replay.** Replay reproduces a decision. It
+  never observes. Re-evaluating sealed evidence against a newer clock is a
+  different question with a different name, and old evidence goes stale.
+- **That signed data is true.** A valid signature proves who signed some bytes.
+- **That an authenticated actor is honest.** Authentication establishes who is
+  speaking, and nothing about what was said.
+- **That several relays are several observations.** A claim passed through three
+  agents is one claim wearing three names.
+- **That successful transport means a successful task.** HTTP 200, a green CI
+  check, an A2A `completed` state and an ADK success callback are all claims.
+- **That CI success satisfies an arbitrary runtime requirement.** A green build
+  is evidence about a build.
+- **That bundle integrity establishes collector trust.** The digest says the
+  bytes are unaltered. Who to believe is a separate input.
+- **Production readiness, SLA, availability, or performance.** No load, scale or
+  latency claim is made anywhere in this repository.
+
 ## The whole system
 
 ```mermaid

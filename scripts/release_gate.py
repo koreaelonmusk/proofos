@@ -93,7 +93,9 @@ SECRET_ALLOWLIST: dict[tuple[str, str], str] = {
         "the PEM header quoted in the module docstring, documenting the format "
         "a collector private key file takes -- not key material",
     ("tests/test_journal.py", "inline credential"):
-        "api_key='should-not-be-stored', the literal a redaction test drops",
+        "a placeholder credential passed to a journal event so a redaction test "
+        "can assert the key is dropped. Described rather than quoted here: an "
+        "exemption avoided is better than an exemption granted",
     ("tests/test_bundle.py", "private key block"):
         "synthetic credentials proving that bundle export refuses to carry any "
         "of these; the corpus is the test",
@@ -326,8 +328,13 @@ def gate_secrets(state: dict) -> GateResult:
     if unused:
         # An allowlist entry that matches nothing is an exemption nobody needs,
         # and the next person reads it as evidence that something is there.
+        #
+        # One caveat, learned the hard way: this scan covers *tracked* files, so
+        # an entry naming a file that is not yet committed will report as stale
+        # and stop being stale the moment it is added. Check that before
+        # deleting one.
         lines.append(f"stale entries    {len(unused)} allowlist entr(ies) match "
-                     f"nothing and should be deleted:")
+                     f"nothing in the tracked set:")
         lines += [f"    {p}  [{label}]" for p, label in unused]
     return result.ok(*lines)
 

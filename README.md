@@ -379,7 +379,7 @@ Executed and observed, not inferred:
 - Runtime action ceiling held under a live model
 - Judge console derived from those executions, byte-for-byte reproducible
 
-**1110 tests.**
+**1133 tests.**
 
 ## Not claimed
 
@@ -409,7 +409,7 @@ proofos_service/      deployable API, configuration, collector client
 web/                  judge console (vanilla HTML/CSS/JS, no build framework)
 artifacts/            cloud proof, restart proof, sanitized execution captures
 scripts/              proof bundle, single-file console, continuity proof
-tests/                1110 tests
+tests/                1133 tests
 docs/                 architecture, deployment, demo script, judge walkthrough
 .github/workflows/    CI and judge-console publishing
 ```
@@ -417,6 +417,20 @@ docs/                 architecture, deployment, demo script, judge walkthrough
 ---
 
 ## Documentation
+
+**Architecture contract** — what the implementation enforces, and what it never claims:
+
+- [Architecture](docs/architecture.md) — the deployed system, and what ProofOS does *not* prove
+- [Trust boundaries](docs/trust-boundary.md) — who may do what, and the transport authority matrix
+- [Evidence lifecycle](docs/evidence-lifecycle.md) — `VERIFIED`, `ABSTAIN`, and where authority first appears
+- [Proof bundles](docs/proof-bundles.md) — portable proof and offline replay
+- [Signed attestations](docs/attestations.md) — what a signature proves, and what it does not
+- [Threat model](docs/threat-model.md) — each attack, its response, and the test enforcing it
+- [Integration guide](docs/integrations.md) — the two paths to the verifier
+- [Operator runbook](docs/operator-runbook.md) — every failure code and what to do about it
+- [Repository governance](docs/governance.md) — lease discipline for concurrent writers
+
+**Submission**
 
 - [Judge walkthrough](docs/judge-walkthrough.md) — what to look at, and how to check it
 - [Architecture](docs/architecture.md) — components and trust boundaries
