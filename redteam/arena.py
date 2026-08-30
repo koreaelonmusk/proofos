@@ -44,7 +44,10 @@ WHAT DOES NOT COUNT, AND WHY
 from __future__ import annotations
 
 import argparse
+import datetime
+import hashlib
 import importlib.util
+import json
 import pathlib
 import sys
 import traceback
@@ -201,14 +204,103 @@ def load_attempts(only: str | None = None):
         yield path.stem, mod
 
 
+HERE = pathlib.Path(__file__).resolve().parent
+FREEZE = HERE / "FREEZE.json"
+
+#: The release candidate whose proofos/ package this challenge attacks.
+RC_SHA = "2a20b7c5def63c61b7914621b04c91a77e248a3b"
+
+
+def _sha_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _sha_file(path: pathlib.Path) -> str:
+    return _sha_bytes(path.read_bytes())
+
+
+def _package_digest() -> str:
+    """Digest of the proofos package actually under attack.
+
+    A challenger should be able to confirm that the code they broke is the code
+    the project claims was frozen, without trusting a commit message.
+    """
+    pkg = ROOT / "proofos"
+    parts = [f"{p.relative_to(pkg).as_posix()}:{_sha_file(p)}"
+             for p in sorted(pkg.rglob("*.py"))]
+    return _sha_bytes("".join(parts).encode())
+
+
+def _frozen_set() -> dict:
+    attempts = sorted((HERE / "attempts").glob("*.py"))
+    corpus = {f"attempts/{p.name}": _sha_file(p) for p in attempts}
+    return {
+        "challenge_version": "w3-e2.1",
+        "rc_sha": RC_SHA,
+        "proofos_package_digest": _package_digest(),
+        "spec_sha": _sha_file(HERE / "README.md"),
+        "arena_sha": _sha_file(HERE / "arena.py"),
+        # The adjudicator lives in arena.py; recorded separately so that a
+        # later split into its own module cannot silently drop the guarantee.
+        "adjudicator_sha": _sha_file(HERE / "arena.py"),
+        "attack_corpus": corpus,
+        "attack_corpus_sha": _sha_bytes(
+            "".join(f"{k}:{v}" for k, v in sorted(corpus.items())).encode()),
+    }
+
+
+def do_freeze() -> int:
+    payload = _frozen_set()
+    payload["frozen_at"] = datetime.datetime.now(datetime.timezone.utc) \
+        .replace(microsecond=0).isoformat()
+    FREEZE.write_bytes((json.dumps(payload, indent=2, sort_keys=True) + "\n").encode())
+    print("  challenge frozen")
+    for key in ("challenge_version", "rc_sha", "proofos_package_digest",
+                "spec_sha", "arena_sha", "adjudicator_sha", "attack_corpus_sha"):
+        print(f"    {key:<24} {payload[key]}")
+    return 0
+
+
+def verify_freeze(quiet: bool = False) -> bool:
+    """Has anything the challenge is judged by moved since it was published?
+
+    This is what stops a defender from losing and then editing the arena until
+    the attack 'fails'. Re-freezing is allowed; doing it invisibly is not,
+    because the recorded digests are what an external attacker checked against.
+    """
+    if not FREEZE.exists():
+        if not quiet:
+            print("  NOT FROZEN: run --freeze before publishing the challenge")
+        return False
+    frozen = json.loads(FREEZE.read_text(encoding="utf-8"))
+    current = _frozen_set()
+    drift = [k for k in ("rc_sha", "proofos_package_digest", "spec_sha",
+                         "arena_sha", "adjudicator_sha", "attack_corpus_sha")
+             if frozen.get(k) != current.get(k)]
+    if drift and not quiet:
+        print("  CHALLENGE DRIFT since the freeze:")
+        for k in drift:
+            print(f"    {k}\n      frozen  {frozen.get(k)}\n      current {current.get(k)}")
+    elif not quiet:
+        print(f"  challenge matches its freeze ({frozen.get('frozen_at')})")
+    return not drift
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--freeze", action="store_true",
+                    help="record the SHAs an external attacker is judged against")
+    ap.add_argument("--verify-freeze", action="store_true")
     ap.add_argument("--attempt")
     ap.add_argument("--audit", action="store_true",
                     help="weaken ProofOS deliberately and require a BYPASS verdict")
     args = ap.parse_args()
 
+    if args.freeze:
+        return do_freeze()
+    if args.verify_freeze:
+        return 0 if verify_freeze() else 1
     if args.audit:
         return audit()
 
@@ -216,6 +308,7 @@ def main() -> int:
     print(f"  claim        {CLAIM!r}")
     print(f"  requirement  {KIND}, observed within 900s")
     print(f"  ground truth requirement satisfied = {GROUND_TRUTH_SATISFIED}")
+    verify_freeze()
     print()
 
     results = []

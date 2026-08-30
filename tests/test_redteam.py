@@ -7,6 +7,7 @@ tests defend the two failure directions.
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 import unittest
 
@@ -87,6 +88,72 @@ class TheChallengeDoesNotOverclaimTests(unittest.TestCase):
                        "proven secure", "no vulnerabilities"):
             self.assertNotIn(phrase, text, f"the challenge claims {phrase!r}")
 
+
+
+class TheChallengeScopeIsExplicitTests(unittest.TestCase):
+    """An external attacker must be able to argue scope from the document."""
+
+    def setUp(self):
+        self.text = (ROOT / "redteam" / "README.md").read_text(encoding="utf-8")
+
+    def test_the_in_scope_win_condition_is_stated(self):
+        for phrase in ("IN-SCOPE BYPASS", "decision.verified is True",
+                       "authority boundary remain intact"):
+            self.assertIn(phrase, self.text)
+
+    def test_every_out_of_scope_move_is_listed(self):
+        for move in ("replacing the verifier",
+                     "altering trusted collector configuration",
+                     "constructing a separate permissive ledger",
+                     "injecting a malicious trust root as the operator",
+                     "arbitrary code execution that rewrites the running process",
+                     "changing the challenge adjudicator"):
+            self.assertIn(move, self.text, f"out-of-scope move not listed: {move}")
+
+    def test_the_sealed_ledger_observation_is_not_upgraded_into_a_claim(self):
+        """One configuration refusing one path is not a general defence."""
+        self.assertIn("does **not** mean", self.text)
+        # The sentence may be quoted, but only to be refused. Every occurrence
+        # must sit inside a negation; an earlier version of this test stripped
+        # the quote marks and so manufactured the match it then flagged.
+        claim = "ProofOS protects against arbitrary same-process compromise"
+        for match in re.finditer(re.escape(claim), self.text):
+            preceding = self.text[max(0, match.start() - 60):match.start()]
+            self.assertIn("not", preceding,
+                          "the sealed-ledger result is stated as a general defence")
+
+
+class TheChallengeIsFrozenTests(unittest.TestCase):
+    def test_the_freeze_exists_and_matches(self):
+        self.assertTrue((ROOT / "redteam" / "FREEZE.json").exists(),
+                        "the challenge must be frozen before it is published")
+        self.assertTrue(arena.verify_freeze(quiet=True),
+                        "the challenge has drifted from its recorded freeze")
+
+    def test_the_freeze_records_every_judged_surface(self):
+        import json
+        frozen = json.loads((ROOT / "redteam" / "FREEZE.json").read_text(encoding="utf-8"))
+        for field in ("rc_sha", "proofos_package_digest", "spec_sha", "arena_sha",
+                      "adjudicator_sha", "attack_corpus_sha", "challenge_version"):
+            self.assertIn(field, frozen)
+        self.assertEqual(arena.RC_SHA, frozen["rc_sha"])
+
+    def test_the_freeze_does_not_reference_itself(self):
+        import json
+        raw = (ROOT / "redteam" / "FREEZE.json").read_text(encoding="utf-8")
+        self.assertNotIn("FREEZE.json", raw,
+                         "a self-referential checksum cannot be verified")
+
+
+class TheChallengeDocumentDoesNotCarryItsOwnDigestTests(unittest.TestCase):
+    """A document cannot state its own hash and stay correct."""
+
+    def test_the_readme_does_not_embed_a_spec_sha_value(self):
+        text = (ROOT / "redteam" / "README.md").read_text(encoding="utf-8")
+        embedded = re.findall(r"spec_sha\s+([0-9a-f]{64})", text)
+        self.assertEqual([], embedded,
+                         "the challenge document prints its own digest, which "
+                         "is wrong the moment the document is saved")
 
 if __name__ == "__main__":
     unittest.main()
