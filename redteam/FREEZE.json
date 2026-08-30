@@ -1,18 +1,18 @@
 {
-  "adjudicator_sha": "1cea8797383febc2218b924c64b1189d97e9b12ae120bd15c4d869490f4952d6",
-  "arena_sha": "1cea8797383febc2218b924c64b1189d97e9b12ae120bd15c4d869490f4952d6",
+  "adjudicator_sha": "77a4ee59b342d9d6aec354828b2fa199d339e4e1ae2565e672f3992e7413ed06",
+  "arena_sha": "77a4ee59b342d9d6aec354828b2fa199d339e4e1ae2565e672f3992e7413ed06",
   "attack_corpus": {
-    "attempts/attacker_signature.py": "73f223a5dd2b00afd30b7872452f4cc16805a6f1b49d45f1f10fa4eef1a6a927",
-    "attempts/bundle_self_certification.py": "38dda0a8b1d63773c7d7f47217084a71eee76f0945117b8d14e293cbd5288fb0",
-    "attempts/caller_declared_observed.py": "87579c5bc79ea8d8bd90f257a4a92b51845ce64f0e801cf03be4f9ea4d1f58b4",
+    "attempts/attacker_signature.py": "b5455ecc8e91b18b2bf2fb235b3f70753905421b9fea653f31920a5113153b0c",
+    "attempts/bundle_self_certification.py": "6a262d0e1b91ea7fa3200b649aaa5ebb92d720fa15f6fba4fc95c4c978be2a1d",
+    "attempts/caller_declared_observed.py": "0f0de3859eebfc73a347cbee62420350e75ae77e9f310ba53e9191a2e76edc1f",
     "attempts/out_of_scope_capability.py": "2184ede07a8745b0c65dc669201605d5e7c55902a8fe58afa96b3e9b975e7794",
-    "attempts/self_report.py": "a6b309230eeeaa6426d4d03d18e9cefcf4b607bc39a06fa8248560faa2d41dd3",
-    "attempts/transport_multiplication.py": "6be52703339be7925f9d95338bdcb430780bc6bd8679245222955d66a31053be"
+    "attempts/self_report.py": "3b27674304b6f1f3eca4ad9ab40dca0007b040bc0c8a7bd73edf4771c4a72e18",
+    "attempts/transport_multiplication.py": "959427bf0b429111f5f36bf874c8e393eb264ac1cad437a16319797bb5ee6bb5"
   },
-  "attack_corpus_sha": "5f0e5e54ccab70db737f0f9105f5be45d31d7bfab7b10e6cdb7b4104ae6a184f",
-  "challenge_version": "w3-e2.1",
-  "frozen_at": "2026-08-30T18:46:13+00:00",
-  "proofos_package_digest": "9db5d45b7716da2846cc2cd67457a2dce3404f79e83bbfeb8df17a23bfcc0386",
+  "attack_corpus_sha": "6f2f13ce0fc91f597fae8b349a7dc781883b7a7edc7de2464bb0d64f750aa2d4",
+  "challenge_version": "w3-e2.2",
+  "frozen_at": "2026-08-30T19:54:44+00:00",
+  "proofos_package_digest": "1115c4e493d871fc2c0b30e7943a0256ff6284e7b8debd14dcc76150e2588ca1",
   "rc_sha": "2a20b7c5def63c61b7914621b04c91a77e248a3b",
-  "spec_sha": "b082b1acb949ce5af8148bd7ccc66dc2f885a745dab889e6a1bdeb9416ab2727"
+  "spec_sha": "0f72a84c5cd70e66a6f64ac51b221736a7b08b0d2dc83fe084ccdf44076b6370"
 }

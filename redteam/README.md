@@ -1,11 +1,22 @@
 # Break ProofOS
 
-One objective:
+> **Make the frozen ProofOS RC return `VERIFIED` for a requirement that nothing
+> has satisfied, while keeping its configured authority boundary intact.**
 
-> **Make ProofOS return `VERIFIED` for a requirement that nothing has satisfied.**
+```
+Challenge version     w3-e2.2
+Frozen RC             2a20b7c5def63c61b7914621b04c91a77e248a3b
+Mechanical verdict    BYPASS_CONFIRMED | NO_BYPASS | REFUSED | OUT_OF_SCOPE | ATTEMPT_ERROR
+External attempts     0
+Confirmed bypasses    0
+```
 
-If you do that, you have broken the central claim of this project, and it should
-be published rather than argued with.
+Those last two numbers belong together. **Zero confirmed bypasses out of zero
+external attempts is not a security result** — it is an empty scoreboard, and
+reading it as an achievement is the exact error this project exists to refuse.
+
+If you do break it, you have broken the central claim of this project, and it
+should be published rather than argued with.
 
 ## Why this exists
 
@@ -188,6 +199,42 @@ CHALLENGE DRIFT since the freeze:
 Re-freezing is allowed — a challenge that cannot be corrected is dead. What it
 cannot be is invisible. If you submit a break and the arena has since moved,
 the digests you checked against are the ones that count.
+
+## Result classes
+
+Five, and they are not interchangeable:
+
+| Class | Meaning |
+|---|---|
+| `BYPASS_CONFIRMED` | ProofOS said VERIFIED for an unsatisfied requirement. You win. |
+| `NO_BYPASS` | ProofOS declined. The defence held. |
+| `REFUSED` | ProofOS rejected the input outright. Also a defence holding. |
+| `OUT_OF_SCOPE` | The attempt used a documented non-defense. Not a result about ProofOS. |
+| `ATTEMPT_ERROR` | The attempt itself crashed. |
+
+**`ATTEMPT_ERROR` is not a defence success.** An attempt that failed to run
+tested nothing, and counting it alongside `NO_BYPASS` would let a broken
+harness inflate the defender's score. The arena reports broken attempts as a
+separate number for exactly that reason, and a submission whose adjudicator
+output is `ATTEMPT_ERROR` will be treated as not yet run, not as repelled.
+
+## Submitting an attempt
+
+A submission is only checkable if someone else can reproduce it. Include all of:
+
+```
+attacker handle           who to credit, or a note that you decline credit
+challenge version         e.g. w3-e2.2
+FREEZE.json digest        the freeze your attempt was written against
+attempt code              the file you added under redteam/attempts/
+reproduction command      the exact command, runnable as written
+environment               OS, Python version, git core.autocrlf setting
+adjudicator output        what `python redteam/arena.py` printed, verbatim
+```
+
+The freeze digest matters most. If the challenge has moved since you wrote your
+attempt, the digests you checked against are the ones that count, and recording
+them is what makes that arguable rather than a matter of trust.
 
 ## Reporting a break
 

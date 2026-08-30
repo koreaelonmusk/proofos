@@ -1,0 +1,14 @@
+# Line endings are content as far as a digest is concerned.
+#
+# The public red-team challenge is verified by hashing the files a challenger
+# checks out. Git converts line endings on checkout, so without a policy here a
+# clone under core.autocrlf=true produces different bytes than the tree the
+# freeze was computed in -- which is exactly the defect published as w3-e2.1.
+#
+# This is defence in depth, not the fix. The freeze canonicalizes CRLF to LF
+# before hashing, so verification holds even for a checkout that ignores this
+# file. Both together mean a challenger sees the same digest either way.
+redteam/**      text eol=lf
+
+# The frozen challenge record must never be rewritten by a checkout filter.
+redteam/FREEZE.json   text eol=lf

@@ -211,12 +211,44 @@ FREEZE = HERE / "FREEZE.json"
 RC_SHA = "2a20b7c5def63c61b7914621b04c91a77e248a3b"
 
 
+#: Suffixes whose bytes are canonicalized before hashing. Anything not listed
+#: is hashed exactly as it sits on disk, because normalizing an unknown format
+#: could corrupt it and would hide real differences.
+TEXT_SUFFIXES = frozenset({".py", ".md", ".json", ".txt", ".toml", ".cfg", ".yml", ".yaml"})
+
+
+def canonical_bytes(data: bytes, *, is_text: bool) -> bytes:
+    """Remove line-ending representation, and nothing else.
+
+    THE RULE
+        CRLF becomes LF. That is the entire transformation.
+
+    WHY IT EXISTS
+        Git converts line endings on checkout. With `core.autocrlf=true` a
+        clone of the same commit produces different bytes than the tree the
+        freeze was computed in, so a digest over working-tree bytes says the
+        challenge changed when nothing changed. Version w3-e2.1 shipped with
+        exactly that defect: it verified on the author's machine and failed on
+        every fresh clone.
+
+    THE LIMIT THAT MATTERS
+        Canonicalization may erase how content is *represented*. It must never
+        erase content. Replacing CRLF with LF cannot make two semantically
+        different files agree -- change a character and the digest still moves.
+        A canonicalizer that hid a real change would be far worse than the bug
+        it was written to fix, so `tests/test_redteam_freeze.py` requires that a
+        one-character edit to an attack still alters the digest.
+    """
+    return data.replace(b"\r\n", b"\n") if is_text else data
+
+
 def _sha_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
 def _sha_file(path: pathlib.Path) -> str:
-    return _sha_bytes(path.read_bytes())
+    return _sha_bytes(canonical_bytes(path.read_bytes(),
+                                      is_text=path.suffix.lower() in TEXT_SUFFIXES))
 
 
 def _package_digest() -> str:
@@ -235,7 +267,7 @@ def _frozen_set() -> dict:
     attempts = sorted((HERE / "attempts").glob("*.py"))
     corpus = {f"attempts/{p.name}": _sha_file(p) for p in attempts}
     return {
-        "challenge_version": "w3-e2.1",
+        "challenge_version": "w3-e2.2",
         "rc_sha": RC_SHA,
         "proofos_package_digest": _package_digest(),
         "spec_sha": _sha_file(HERE / "README.md"),
@@ -261,21 +293,23 @@ def do_freeze() -> int:
     return 0
 
 
-def verify_freeze(quiet: bool = False) -> bool:
+def verify_freeze(quiet: bool = False, path: pathlib.Path | None = None) -> bool:
     """Has anything the challenge is judged by moved since it was published?
 
     This is what stops a defender from losing and then editing the arena until
     the attack 'fails'. Re-freezing is allowed; doing it invisibly is not,
     because the recorded digests are what an external attacker checked against.
     """
-    if not FREEZE.exists():
+    freeze_path = path or FREEZE
+    if not freeze_path.exists():
         if not quiet:
             print("  NOT FROZEN: run --freeze before publishing the challenge")
         return False
-    frozen = json.loads(FREEZE.read_text(encoding="utf-8"))
+    frozen = json.loads(freeze_path.read_text(encoding="utf-8"))
     current = _frozen_set()
-    drift = [k for k in ("rc_sha", "proofos_package_digest", "spec_sha",
-                         "arena_sha", "adjudicator_sha", "attack_corpus_sha")
+    drift = [k for k in ("challenge_version", "rc_sha", "proofos_package_digest",
+                         "spec_sha", "arena_sha", "adjudicator_sha",
+                         "attack_corpus_sha")
              if frozen.get(k) != current.get(k)]
     if drift and not quiet:
         print("  CHALLENGE DRIFT since the freeze:")
