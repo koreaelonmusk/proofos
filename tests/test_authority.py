@@ -36,7 +36,7 @@ from proofos.failures import (
     ToolNotAllowed,
 )
 from proofos.journal import EventType, InMemoryJournalSink, Journal
-from proofos.ledger import EvidenceLedger
+from proofos.ledger import EvidenceLedger, EvidenceTamperedError
 from proofos.messages import AgentMessage, MessageBus, MessageType
 from proofos.registry import (
     COLLECTOR_CI_ID,
@@ -798,3 +798,74 @@ class NoGlobalAuthorityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EachLedgerRefusalIsSeparatelyLoadBearingTests(unittest.TestCase):
+    """L5, L7, L8: refusals that only a neighbouring check was catching.
+
+    L5 is the interesting one. Removing the "no grant supplied" branch changes
+    no outcome, because the next line rejects None just as firmly -- so the
+    check is redundant defence in depth, and the only thing lost is the message
+    that tells an operator which of several things went wrong. That is worth a
+    test precisely because it is not worth a crash: diagnosis is the difference
+    between a fix and a guess.
+    """
+
+    KIND = "runtime"
+    TASK = "T"
+    NOW = 1_700_000_000.0
+
+    def ledger(self):
+        led = EvidenceLedger()
+        led.open_task(self.TASK, ())
+        grant = led.grant_observation("collector-a", (self.KIND,))
+        led.seal()
+        return led, grant
+
+    def observation(self, **overrides):
+        spec = {"kind": self.KIND, "value": "probe 200",
+                "source": EvidenceSource.OBSERVED, "collected_at": self.NOW,
+                "collector": "collector-a"}
+        spec.update(overrides)
+        return Evidence(**spec)
+
+    def test_a_missing_grant_is_refused_and_says_so(self):
+        # L5. The outcome is a refusal either way; the message is what makes
+        # the refusal actionable.
+        led, _ = self.ledger()
+        with self.assertRaises(CapabilityDenied) as caught:
+            led.record(self.TASK, self.observation())
+        self.assertIn("no observation grant supplied", str(caught.exception))
+
+    def test_a_mutated_stored_record_is_refused_on_read(self):
+        # L7. In process this cannot fire, because Evidence is frozen. It
+        # exists so the contract still holds when records come back from a
+        # durable store, and it needs a test for the same reason.
+        led, grant = self.ledger()
+        led.record(self.TASK, self.observation(), grant)
+        stored = led._require(self.TASK).evidence
+        stored[0] = Evidence(kind=self.KIND, value="probe 500",
+                             source=EvidenceSource.OBSERVED,
+                             collected_at=self.NOW, collector="collector-a",
+                             content_hash=stored[0].content_hash)
+        with self.assertRaises(EvidenceTamperedError):
+            led.evidence(self.TASK)
+
+    def test_a_capability_records_the_outcome_it_was_given(self):
+        # L8. `satisfies` comes from what the collector observed. A capability
+        # that hard-coded valid=True would turn every observation, including an
+        # unhealthy one, into support for the claim.
+        led = EvidenceLedger()
+        led.open_task(self.TASK, ())
+        capability = ObservationCapability(led, "collector-a", (self.KIND,))
+        led.seal()
+
+        healthy = capability.record_observation(
+            self.TASK, kind=self.KIND, value="probe 200", satisfies=True,
+            collected_at=self.NOW)
+        unhealthy = capability.record_observation(
+            self.TASK, kind=self.KIND, value="probe 503", satisfies=False,
+            collected_at=self.NOW)
+        self.assertTrue(healthy.valid)
+        self.assertFalse(unhealthy.valid,
+                         "an unhealthy observation was recorded as valid")

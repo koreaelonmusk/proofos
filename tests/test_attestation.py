@@ -26,6 +26,7 @@ from proofos.attestation import (
     response_digest,
 )
 from proofos.capabilities import ObservationCapability
+from proofos.ledger import EvidenceLedger
 from proofos.collector_registry import (
     CollectorRecord,
     CollectorRegistry,
@@ -636,3 +637,85 @@ class KeySeparationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EachBindingIsSeparatelyLoadBearingTests(unittest.TestCase):
+    """I5, I6, I12: gates that were caught only by their neighbours.
+
+    Every one of these was already refused somewhere. What was missing is a
+    test that fails when *this specific* check is removed -- and a defence with
+    no test of its own is one that can be deleted during a refactor without
+    anything going red until much later, somewhere unrelated.
+
+    Each test therefore arranges a payload that passes every other gate.
+    """
+
+    KIND = "runtime_health"
+    OTHER_KIND = "task_outcome"
+    PROFILE = "cloud-run-health"
+    OTHER_PROFILE = "artifact-digest"
+    TASK = "DEPLOY-9"
+    EXECUTION = "exec_1"
+    NOW = 1_700_000_000.0
+
+    def rig(self, kinds=(KIND, OTHER_KIND), profiles=(PROFILE, OTHER_PROFILE),
+            capabilities=None):
+        signer = AttestationSigner.generate("proofos-collector")
+        registry = registry_for("proofos-collector", signer.public_key_b64(),
+                                kinds, profiles)
+        ledger = EvidenceLedger()
+        ledger.open_task(self.TASK, ())
+        capability = ObservationCapability(ledger, "proofos-collector", kinds)
+        nonces = NonceLedger()
+        ledger.seal()
+        wired = {"proofos-collector": capability} if capabilities is None else capabilities
+        return signer, AttestationIngestor(wired, registry, nonces), ledger
+
+    def sign(self, signer, ingestor, *, kind=KIND, profile=PROFILE):
+        nonce = ingestor.issue_nonce(self.EXECUTION, self.TASK, kind)
+        return signer.sign(
+            execution_id=self.EXECUTION, task_id=self.TASK, kind=kind,
+            profile_id=profile, request_nonce=nonce, observed_at=self.NOW - 10,
+            outcome=Outcome.HEALTHY, status_code=200,
+            response_digest_value=response_digest(b"ok"),
+            detail="anon 403 -> authed 200")
+
+    def test_an_attestation_for_a_kind_the_runtime_did_not_ask_for_is_refused(self):
+        # I5. The collector is scoped to both kinds, so the registry is happy.
+        # What refuses this is the binding between the request and the answer.
+        signer, ingestor, _ = self.rig()
+        attestation = self.sign(signer, ingestor, kind=self.OTHER_KIND)
+        result = ingestor.ingest(
+            attestation.to_dict(), self.EXECUTION, self.TASK,
+            self.KIND, self.PROFILE, attestation.request_nonce, 900,
+            now=self.NOW)
+        self.assertFalse(result.accepted)
+        self.assertIn(result.reason, {RejectionReason.KIND_MISMATCH,
+                                      RejectionReason.NONCE_BINDING})
+
+    def test_an_attestation_from_a_profile_the_runtime_did_not_ask_for_is_refused(self):
+        # I6. Same shape: the collector may use both profiles, and this is
+        # still not the observation that was requested.
+        signer, ingestor, _ = self.rig()
+        attestation = self.sign(signer, ingestor, profile=self.OTHER_PROFILE)
+        result = ingestor.ingest(
+            attestation.to_dict(), self.EXECUTION, self.TASK,
+            self.KIND, self.PROFILE, attestation.request_nonce, 900,
+            now=self.NOW)
+        self.assertFalse(result.accepted)
+        self.assertIs(result.reason, RejectionReason.PROFILE_MISMATCH)
+
+    def test_a_registered_collector_with_no_capability_records_nothing(self):
+        # I12. The registry knows this collector and the signature verifies --
+        # the wiring simply never gave it an observation capability. Refusing is
+        # the only safe reading: the alternative is writing evidence on behalf
+        # of something the runtime was never configured to hear from.
+        signer, ingestor, ledger = self.rig(capabilities={})
+        attestation = self.sign(signer, ingestor)
+        result = ingestor.ingest(
+            attestation.to_dict(), self.EXECUTION, self.TASK,
+            self.KIND, self.PROFILE, attestation.request_nonce, 900,
+            now=self.NOW)
+        self.assertFalse(result.accepted)
+        self.assertIs(result.reason, RejectionReason.UNKNOWN_COLLECTOR)
+        self.assertEqual(ledger.evidence(self.TASK), ())

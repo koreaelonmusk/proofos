@@ -23,6 +23,8 @@ Gates:
     secrets   scan every tracked file for credentials, with a narrow, reasoned allowlist
     suite     the full test suite, plus: the suite must leave the tree clean
     guards    plant each structural guard's violation and require it to fail
+    security  break one authority-critical line at a time; the test that
+              claims to defend it must be the one that fails
 """
 
 from __future__ import annotations
@@ -385,8 +387,42 @@ def gate_guards(state: dict) -> GateResult:
                      "each planted violation made its guard fail")
 
 
+def gate_security(state: dict) -> GateResult:
+    """Authority-critical mutations, each killed by the test that claims it.
+
+    A mutation killed by something other than its target has told you the system
+    is defended and not that the defence is where it says. scripts/security_gate.py
+    reports those separately and does not count them.
+    """
+    result = GateResult("security")
+    audit = run(sys.executable, "scripts/security_gate.py")
+    summary = next((line.strip() for line in audit.stdout.splitlines()
+                    if line.strip().startswith("applied ")), "")
+    if audit.returncode != 0:
+        detail = [line.strip() for line in audit.stdout.splitlines()
+                  if "SURVIVED" in line or "UPSTREAM" in line
+                  or "NOT_APPLIED" in line]
+        return result.fail(summary or "the gate did not report", *detail[:12])
+    return result.ok(summary or "all mutations killed at their target",
+                     "every authority-critical line has a test that fails "
+                     "when it is removed")
+
+
 GATES = {"wheel": gate_wheel, "install": gate_install, "deps": gate_deps,
-         "secrets": gate_secrets, "suite": gate_suite, "guards": gate_guards}
+         "secrets": gate_secrets, "suite": gate_suite, "guards": gate_guards,
+         "security": gate_security}
+
+
+def exit_status(results: list[GateResult]) -> int:
+    """Zero only when every gate ran and every gate passed.
+
+    A separate function so it can be exercised directly rather than inferred
+    from a whole run. The two collapses it exists to prevent: a gate that did
+    not run counted as green, and one failing gate lost in a summary.
+    """
+    failed = [r for r in results if r.passed is False]
+    skipped = [r for r in results if r.passed is None]
+    return 1 if failed or skipped else 0
 
 
 def main() -> int:
@@ -424,8 +460,7 @@ def main() -> int:
     print(f"  {len(results) - len(failed) - len(skipped)}/{len(results)} passed"
           + (f", {len(failed)} failed: {failed}" if failed else "")
           + (f", {len(skipped)} not run: {skipped}" if skipped else ""))
-    # A gate that did not run is not a gate that passed.
-    return 1 if failed or skipped else 0
+    return exit_status(results)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import unittest
 
 from proofos.verifier import (
     Evidence,
+    Requirement,
     EvidenceSource,
     FailureClass,
     VerificationStatus,
@@ -183,3 +184,87 @@ class AnomalyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheDefencesThisKernelClaimsTests(unittest.TestCase):
+    """K3, K7, K8: three refusals, tested where they are implemented.
+
+    Each of these was caught by some other module before this class existed --
+    the freshness rule by a replay test, the tamper rule by a ledger test, the
+    crash rule by nothing nearby. Catching a regression somewhere is better than
+    nowhere and worse than catching it here: a defence with no test in its own
+    module is one that moves the day its neighbour is rewritten.
+    """
+
+    NOW = 1_700_000_000.0
+
+    def dated(self, kind, at, source=OBSERVED):
+        return Evidence(kind, "observed-signal", source, True, collected_at=at)
+
+    def test_the_freshness_horizon_actually_excludes_old_evidence(self):
+        # K3. Real, trusted, intact -- and older than the requirement allows.
+        result = verify_completion(
+            claim="Production fix completed",
+            evidence=(self.dated("runtime", self.NOW - 4000),),
+            required_kinds=(Requirement("runtime", max_age_seconds=900),),
+            now=self.NOW,
+        )
+        self.assertEqual(result.status, VerificationStatus.ABSTAIN)
+        self.assertEqual(result.failure, FailureClass.EVIDENCE_STALE)
+
+    def test_the_same_evidence_inside_the_horizon_verifies(self):
+        # The other half: without this, a horizon that rejected everything
+        # would pass the test above and be just as wrong.
+        result = verify_completion(
+            claim="Production fix completed",
+            evidence=(self.dated("runtime", self.NOW - 60),),
+            required_kinds=(Requirement("runtime", max_age_seconds=900),),
+            now=self.NOW,
+        )
+        self.assertEqual(result.status, VerificationStatus.VERIFIED)
+
+    def test_undated_evidence_cannot_satisfy_a_requirement_with_a_horizon(self):
+        result = verify_completion(
+            claim="Production fix completed",
+            evidence=(observed("runtime"),),
+            required_kinds=(Requirement("runtime", max_age_seconds=900),),
+            now=self.NOW,
+        )
+        self.assertEqual(result.failure, FailureClass.EVIDENCE_STALE)
+
+    def test_a_record_that_no_longer_matches_its_digest_fails_the_set(self):
+        # K7. One tampered record poisons the set: this is not "one bad item
+        # among good ones", it is a set nobody can vouch for.
+        tampered = Evidence("runtime", "observed-signal", OBSERVED, True,
+                            content_hash="0" * 64)
+        result = verify_completion(
+            claim="Production fix completed",
+            evidence=(observed("tests"), tampered),
+            required_kinds=REQUIRED,
+        )
+        self.assertEqual(result.status, VerificationStatus.ABSTAIN)
+        self.assertEqual(result.failure, FailureClass.EVIDENCE_TAMPERED)
+        self.assertEqual(result.accepted_evidence_ids, ())
+
+    def test_a_verifier_that_raises_abstains_rather_than_succeeding(self):
+        # K8. The one that would be worst to get wrong and the easiest to get
+        # wrong quietly: an exception handler that returns the wrong constant.
+        #
+        # It has to be a real Evidence, or the malformed-input check refuses it
+        # before the kernel touches anything -- which is a refusal, and not this
+        # refusal. A first attempt used a duck-typed stand-in and passed for
+        # that reason, leaving the handler untested.
+        class Exploding(Evidence):
+            @property
+            def intact(self):
+                raise RuntimeError("the kernel touched something that raised")
+
+        exploding = Exploding("runtime", "boom", OBSERVED, True)
+        result = verify_completion(
+            claim="Production fix completed",
+            evidence=(observed("tests"), exploding),
+            required_kinds=REQUIRED,
+        )
+        self.assertEqual(result.status, VerificationStatus.ABSTAIN)
+        self.assertEqual(result.failure, FailureClass.VERIFIER_FAILURE)
+        self.assertIn("RuntimeError", result.reason)
