@@ -376,6 +376,35 @@ OBSERVATION_KEYS: dict[str, frozenset[str]] = {
     "digest": frozenset({"kind", "check", "path"}),
 }
 
+#: The rest of the verify document, under the same rule. One vocabulary per
+#: object and deliberately not one merged list: `check` is meaningful in an
+#: observation and noise in a requirement, and a global set would tolerate it in
+#: both. That is the same bug wearing a larger hat.
+DOCUMENT_KEYS = frozenset({"claim", "requirements", "evidence", "observations"})
+REQUIREMENT_KEYS = frozenset({"kind", "max_age_seconds"})
+EVIDENCE_KEYS = frozenset({"kind", "value", "source", "valid", "collected_at",
+                           "collector"})
+
+
+def _refuse_unread_keys(obj, allowed: frozenset[str], where: str) -> None:
+    """Refuse a key this build does not read, wherever it appears.
+
+    A key that is dropped in silence is a condition the caller stated and did
+    not get, and the caller is told it succeeded. Naming the offending key, the
+    object it sat in, and the whole permitted set is what makes the refusal
+    usable rather than merely correct.
+    """
+    if not isinstance(obj, dict):
+        return
+    unknown = sorted(set(obj) - allowed)
+    if unknown:
+        raise _VerifyUsage(
+            f"{where} carries {unknown}, which this build does not read. "
+            f"It understands {sorted(allowed)}. A key this build ignores is a "
+            f"condition you asked for and did not get, so it is refused rather "
+            f"than dropped")
+
+
 
 class _VerifyUsage(ValueError):
     """A malformed instruction in the input file."""
@@ -484,6 +513,12 @@ def cmd_verify(args, out) -> int:
             )
 
     try:
+        _refuse_unread_keys(data, DOCUMENT_KEYS, f"{args.evidence}")
+        for index, entry in enumerate(data.get("requirements") or ()):
+            _refuse_unread_keys(entry, REQUIREMENT_KEYS, f"requirements[{index}]")
+        for index, entry in enumerate(data.get("evidence") or ()):
+            _refuse_unread_keys(entry, EVIDENCE_KEYS, f"evidence[{index}]")
+
         requirements = list(policy.as_requirements()) if policy else [
             Requirement(r["kind"], r.get("max_age_seconds"))
             if isinstance(r, dict) else Requirement(str(r))
@@ -501,6 +536,8 @@ def cmd_verify(args, out) -> int:
             for e in data.get("evidence", [])
         ]
         claim = data["claim"]
+    except _VerifyUsage as exc:
+        return _usage(f"{exc}")
     except KeyError as exc:
         return _usage(f"{args.evidence} is missing required key {exc}")
     except ValueError as exc:

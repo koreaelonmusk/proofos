@@ -387,3 +387,149 @@ class TheObservationSpecIsStrictTests(unittest.TestCase):
         _, _, err = self.verify(self.document(self.spec(sha256="0" * 64)))
         for key in ("check", "kind", "path"):
             self.assertIn(key, err)
+
+
+class EveryInputObjectIsStrictTests(unittest.TestCase):
+    """P15-FIX2. The same refusal as the observation spec, three layers up.
+
+    F1 closed one of four places where this parser accepted a key it does not
+    read and returned success. Leaving the other three would make the rule about
+    where the key sat rather than what it did, and a user writing
+    ``{"kind": "artifact", "must_match": "<digest>"}`` is asking for a condition
+    exactly as much as one writing it inside an observation.
+
+        IGNORED REQUIREMENT IS NOT SATISFIED REQUIREMENT
+
+    Each object declares its own allowed set. Deliberately not one merged
+    vocabulary: a single global list is how a key that is legitimate in one
+    place comes to be tolerated in another, which is the bug wearing a larger
+    hat.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.tmp = pathlib.Path(self.dir.name)
+        self.artifact = self.tmp / "artifact.bin"
+        self.artifact.write_bytes(b"hello proofos")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def document(self, **overrides):
+        base = {"claim": "The artifact was produced.",
+                "requirements": [{"kind": "artifact"}],
+                "observations": [{"kind": "artifact", "check": "digest",
+                                  "path": str(self.artifact)}]}
+        base.update(overrides)
+        return base
+
+    def verify(self, document):
+        path = self.tmp / "input.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        return run_verify_capturing_stderr(path)
+
+    # -- the three layers ------------------------------------------------------
+
+    def test_a_requirement_carrying_an_unread_key_is_refused(self):
+        code, _, err = self.verify(self.document(requirements=[
+            {"kind": "artifact", "max_age_seconds": 900,
+             "must_match": "0" * 64}]))
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("must_match", err)
+        self.assertIn("requirements[0]", err)
+
+    def test_an_evidence_entry_carrying_an_unread_key_is_refused(self):
+        code, _, err = self.verify(self.document(evidence=[
+            {"kind": "artifact", "value": "v", "source": "EXECUTOR",
+             "trusted": True}]))
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("trusted", err)
+        self.assertIn("evidence[0]", err)
+
+    def test_a_top_level_key_the_parser_does_not_read_is_refused(self):
+        code, _, err = self.verify(self.document(expect_digest="0" * 64))
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("expect_digest", err)
+
+    # -- each refusal has to be usable -----------------------------------------
+
+    def test_each_refusal_names_the_key_the_context_and_the_allowed_set(self):
+        cases = (
+            (self.document(requirements=[{"kind": "artifact", "nope": 1}]),
+             "nope", "requirements[0]", ("kind", "max_age_seconds")),
+            (self.document(evidence=[{"kind": "artifact", "source": "EXECUTOR",
+                                      "nope": 1}]),
+             "nope", "evidence[0]", ("kind", "value", "source", "collector")),
+            (self.document(nope=1), "nope", "", ("claim", "requirements",
+                                                 "evidence", "observations")),
+        )
+        for document, key, context, allowed in cases:
+            with self.subTest(context=context or "document"):
+                code, _, err = self.verify(document)
+                self.assertEqual(code, EXIT_USAGE)
+                self.assertIn(key, err)
+                if context:
+                    self.assertIn(context, err)
+                for name in allowed:
+                    self.assertIn(name, err)
+
+    # -- the vocabularies stay separate ----------------------------------------
+
+    def test_each_object_declares_its_own_allowed_set(self):
+        from proofos.cli import (
+            DOCUMENT_KEYS,
+            EVIDENCE_KEYS,
+            OBSERVATION_KEYS,
+            REQUIREMENT_KEYS,
+        )
+
+        self.assertEqual(DOCUMENT_KEYS,
+                         frozenset({"claim", "requirements", "evidence",
+                                    "observations"}))
+        self.assertEqual(REQUIREMENT_KEYS,
+                         frozenset({"kind", "max_age_seconds"}))
+        self.assertEqual(EVIDENCE_KEYS,
+                         frozenset({"kind", "value", "source", "valid",
+                                    "collected_at", "collector"}))
+        # Not one merged vocabulary. A key legitimate in one object must not be
+        # tolerated in another, which is what a global list would do.
+        self.assertNotIn("check", REQUIREMENT_KEYS)
+        self.assertNotIn("path", EVIDENCE_KEYS)
+        self.assertNotIn("source", REQUIREMENT_KEYS)
+        self.assertNotIn("claim", EVIDENCE_KEYS)
+        self.assertNotIn("kind", DOCUMENT_KEYS)
+        for name, keys in (("observation", OBSERVATION_KEYS["digest"]),
+                           ("requirement", REQUIREMENT_KEYS),
+                           ("evidence", EVIDENCE_KEYS)):
+            with self.subTest(object=name):
+                self.assertNotEqual(keys, DOCUMENT_KEYS)
+
+    def test_a_key_valid_in_another_object_is_still_refused_here(self):
+        # `check` belongs to an observation. In a requirement it is noise, and
+        # noise that looks meaningful is the whole problem.
+        code, _, err = self.verify(self.document(requirements=[
+            {"kind": "artifact", "check": "digest"}]))
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("check", err)
+
+    # -- and nothing that used to work stops working ---------------------------
+
+    def test_the_supported_document_still_verifies(self):
+        code, out, _ = self.verify(self.document())
+        self.assertEqual(code, EXIT_VERIFIED)
+        self.assertIn("VERIFIED", out)
+
+    def test_every_documented_key_is_accepted(self):
+        code, out, _ = self.verify({
+            "claim": "The artifact was produced.",
+            "requirements": [{"kind": "artifact", "max_age_seconds": 900}],
+            "evidence": [{"kind": "artifact", "value": "self report",
+                          "source": "EXECUTOR", "valid": True,
+                          "collected_at": NOW, "collector": "agent"}],
+            "observations": [{"kind": "artifact", "check": "digest",
+                              "path": str(self.artifact)}]})
+        self.assertEqual(code, EXIT_VERIFIED)
+
+    def test_a_requirement_given_as_a_bare_string_is_still_accepted(self):
+        code, _, _ = self.verify(self.document(requirements=["artifact"]))
+        self.assertEqual(code, EXIT_VERIFIED)
