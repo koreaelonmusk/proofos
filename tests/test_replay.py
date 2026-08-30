@@ -27,6 +27,7 @@ from proofos.bundle import (
     export_bundle,
     load_bundle,
 )
+from proofos.evidence_bridge import evidence_from_envelope
 from proofos.replay import (
     ReplayError,
     ReplayMode,
