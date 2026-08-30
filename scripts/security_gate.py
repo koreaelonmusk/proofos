@@ -198,14 +198,14 @@ MUTATIONS: tuple[tuple[str, str, str, str, str, str], ...] = (
      "proofos/replay.py", "tests.test_replay_attestation",
      "        if record.attestation:",
      "        if record.attestation and record.collector not in trusted:"),
+    # Retargeted: stripping only `public_key` left a second unknown field
+    # in the test's envelope, so the strict parse refused it either way and
+    # the mutation changed nothing. A lenient parse is how such a field
+    # would come to exist in the first place.
     ("R3", "a key carried in the bundle becomes the trust root",
      "proofos/portable_attestation.py", "tests.test_replay_attestation",
-     "    try:\n"
-     "        attestation = attestation_module.ObservationAttestation.from_dict(envelope)",
-     "    if isinstance(envelope, Mapping) and 'public_key' in envelope:\n"
-     "        envelope = {k: v for k, v in envelope.items() if k != 'public_key'}\n"
-     "    try:\n"
-     "        attestation = attestation_module.ObservationAttestation.from_dict(envelope)"),
+     '    try:\n        attestation = attestation_module.ObservationAttestation.from_dict(envelope)',
+     '    if isinstance(envelope, Mapping):\n        _known = set(attestation_module.ENVELOPE_FIELDS)\n        envelope = {k: v for k, v in envelope.items() if k in _known}\n    try:\n        attestation = attestation_module.ObservationAttestation.from_dict(envelope)'),
     ("R4", "a valid signature implies authorization",
      "proofos/portable_attestation.py", "tests.test_replay_attestation",
      "        record = registry.require_scope(attestation.collector_id, attestation.kind,\n"
