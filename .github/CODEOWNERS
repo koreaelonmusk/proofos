@@ -1,0 +1,54 @@
+# Review ownership for ProofOS.
+#
+# WHAT THIS FILE IS
+#   A record of who is responsible for which surfaces, so that a change to an
+#   authority-critical path is never reviewed by accident.
+#
+# WHAT THIS FILE IS NOT
+#   It is not proof that a review happened, and by itself it enforces nothing.
+#   GitHub only requires Code Owner approval when branch protection or a
+#   repository ruleset says so, and no such configuration has been applied to
+#   this repository. See docs/governance/branch-protection-design.md, which is
+#   a design, not a deployed state.
+#
+#   This project has one maintainer. Recording ownership honestly means
+#   recording that the owner and the only available reviewer are the same
+#   person. Enforcing Code Owner review under that arrangement would lock the
+#   repository against its own maintainer while proving nothing about
+#   independence, so the design deliberately does not enable it yet.
+#
+# Paths below are restricted to directories that actually exist in this tree.
+
+# Default owner for everything not matched more specifically.
+*                           @koreaelonmusk
+
+# --- the verification kernel and the evidence it accepts ---------------------
+# Changes here can alter what counts as authority. Highest review bar.
+/proofos/                   @koreaelonmusk
+
+# --- the tests and gates that are the only reason to believe the kernel ------
+/tests/                     @koreaelonmusk
+/scripts/                   @koreaelonmusk
+
+# --- deployable surfaces that hold or move evidence --------------------------
+/proofos_collector/         @koreaelonmusk
+/proofos_service/           @koreaelonmusk
+/proofos_agent/             @koreaelonmusk
+
+# --- automation, which decides what "green" means ----------------------------
+/.github/workflows/         @koreaelonmusk
+/.github/CODEOWNERS         @koreaelonmusk
+
+# --- governance and security documents ---------------------------------------
+/SECURITY.md                @koreaelonmusk
+/CONTRIBUTING.md            @koreaelonmusk
+/docs/governance/           @koreaelonmusk
+
+# --- normative documents held to the code by consistency tests ---------------
+/docs/architecture.md       @koreaelonmusk
+/docs/trust-boundary.md     @koreaelonmusk
+/docs/evidence-lifecycle.md @koreaelonmusk
+/docs/proof-bundles.md      @koreaelonmusk
+/docs/attestations.md       @koreaelonmusk
+/docs/threat-model.md       @koreaelonmusk
+/docs/governance.md         @koreaelonmusk
