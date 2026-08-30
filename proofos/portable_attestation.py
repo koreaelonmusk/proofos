@@ -125,6 +125,17 @@ def verify_portable(
             "no collector registry was supplied. A bundle cannot be its own "
             "trust root, so with nothing vouching for a key there is nothing "
             "to verify against")
+    if not (hasattr(registry, "require_scope") and hasattr(registry, "get")):
+        # Found by the chaos suite: a dict, a namespace or a stray integer
+        # passed as a trust anchor used to reach `registry.require_scope` and
+        # raise AttributeError out of replay. That fails closed -- nothing is
+        # certified -- but it fails as a crash rather than a refusal, and a
+        # caller cannot tell "your anchor is malformed" from "this library has
+        # a bug". A refusal says which.
+        raise PortableAttestationRejected(
+            "MALFORMED_TRUST_ANCHOR",
+            f"a trust anchor must be a CollectorRegistry; got "
+            f"{type(registry).__name__}")
 
     attestation_module, registry_module = _crypto_modules()
 

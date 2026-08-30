@@ -22,6 +22,7 @@ Gates:
     deps      runtime dependencies are zero and the extras are the declared ones
     secrets   scan every tracked file for credentials, with a narrow, reasoned allowlist
     suite     the full test suite, plus: the suite must leave the tree clean
+    guards    plant each structural guard's violation and require it to fail
 """
 
 from __future__ import annotations
@@ -364,8 +365,28 @@ def gate_suite(state: dict) -> GateResult:
                      "working tree unchanged by the run")
 
 
+def gate_guards(state: dict) -> GateResult:
+    """Every structural guard must be watched failing, not merely watched.
+
+    A guard that parses a source file and asserts an absence passes just as
+    happily when it is broken as when the property holds -- the two look
+    identical from outside. scripts/guard_audit.py plants each violation and
+    requires the guard to fail.
+    """
+    result = GateResult("guards")
+    audit = run(sys.executable, "scripts/guard_audit.py")
+    summary = next((line.strip() for line in audit.stdout.splitlines()
+                    if line.strip().startswith("fired ")), "")
+    if audit.returncode != 0:
+        detail = [line.strip() for line in audit.stdout.splitlines()
+                  if "GUARD_INERT" in line or "NOT_PLANTED" in line]
+        return result.fail(summary or "the audit did not report", *detail)
+    return result.ok(summary or "all guards fired",
+                     "each planted violation made its guard fail")
+
+
 GATES = {"wheel": gate_wheel, "install": gate_install, "deps": gate_deps,
-         "secrets": gate_secrets, "suite": gate_suite}
+         "secrets": gate_secrets, "suite": gate_suite, "guards": gate_guards}
 
 
 def main() -> int:
