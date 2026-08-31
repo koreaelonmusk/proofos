@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">ProofOS</title><desc id="desc">ProofOS shield mark and tagline</desc>
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0b1118"/><stop offset="1" stop-color="#020507"/></linearGradient><linearGradient id="a" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#27d7c7"/><stop offset="1" stop-color="#10bfae"/></linearGradient></defs>
+  <rect width="1200" height="720" rx="36" fill="url(#g)"/>
+  <g transform="translate(470 70)">
+    <path d="M130 0 250 42v124c0 112-72 186-120 214C82 352 10 278 10 166V42Z" fill="none" stroke="#f3f7fa" stroke-width="12"/>
+    <path d="M78 95h86c45 0 74 26 74 66 0 39-29 65-74 65h-35v88H78V95Zm51 42v48h31c18 0 28-9 28-24 0-15-10-24-28-24h-31Z" fill="#f3f7fa"/>
+    <path d="m150 214 29 29 61-69" fill="none" stroke="url(#a)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+    <g stroke="#27d7c7" stroke-width="7" fill="none"><path d="M38 143h35M38 177h35M38 211h35"/><circle cx="28" cy="143" r="8"/><circle cx="28" cy="177" r="8"/><circle cx="28" cy="211" r="8"/></g>
+  </g>
+  <text x="600" y="510" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="96" font-weight="800" letter-spacing="6" fill="#f3f7fa">PROOF<tspan fill="#27d7c7">OS</tspan></text>
+  <text x="600" y="575" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="30" font-weight="600" letter-spacing="4" fill="#a9b4c2">AI AGENTS EXECUTE. <tspan fill="#27d7c7">PROOFOS</tspan> PROVES.</text>
+  <g font-family="Inter,Segoe UI,Arial,sans-serif" font-size="21" font-weight="600" fill="#dce3e9" text-anchor="middle"><text x="270" y="650">INDEPENDENT EVIDENCE</text><text x="600" y="650">FAIL-CLOSED VERDICT</text><text x="930" y="650">PUBLIC VERIFICATION</text></g>
+  <g stroke="#27d7c7" stroke-width="3"><line x1="405" y1="625" x2="405" y2="660"/><line x1="795" y1="625" x2="795" y2="660"/></g>
+</svg>
