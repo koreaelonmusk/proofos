@@ -42,11 +42,18 @@ jobs:
       - name: Fail if the committed bundle drifted from the evidence
         run: git diff --exit-code -- web/proof-bundle.json
 
+      # The MP4 is silent. Native browser captions require WebVTT wired through
+      # a <track> element; an SRT download link alone cannot populate the CC menu.
+      # This hosted-only transform runs after the evidence drift check and is
+      # stripped from the offline single-file console by the existing builder.
+      - name: Wire native English captions into the hosted demo
+        run: python scripts/inject_demo_captions.py
+
       - name: Build the self-contained page
         run: python scripts/build_single_file.py
 
       - name: Check the console cannot start work or leak secrets
-        run: python -m unittest tests.test_judge_console -v
+        run: python -m unittest tests.test_judge_console tests.test_demo_captions -v
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

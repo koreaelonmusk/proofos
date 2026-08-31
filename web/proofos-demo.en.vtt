@@ -1,0 +1,85 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:09.000
+AI agents are increasingly given authority to act.
+But an agent saying “done” is not proof that the work succeeded.
+
+00:00:09.000 --> 00:00:18.000
+Most systems still record that self-report as the result.
+The component under scrutiny is also the component certifying itself.
+
+00:00:18.000 --> 00:00:27.000
+ProofOS refuses that shortcut.
+The only outcomes are VERIFIED or ABSTAIN, and the default is refusal.
+
+00:00:27.000 --> 00:00:35.000
+Completion is accepted only when independently authorized evidence satisfies the requirement.
+
+00:00:35.000 --> 00:00:47.000
+The executor claims the task is complete and the service is healthy.
+ProofOS records the claim, then refuses it.
+
+00:00:47.000 --> 00:00:59.000
+The important part: runtime evidence from the executor is already present.
+The refusal is not about absence. It is about provenance.
+
+00:00:59.000 --> 00:01:10.000
+The self-report is internally intact, but it is not accepted by the verifier.
+Integrity and authority are different questions.
+
+00:01:10.000 --> 00:01:22.000
+ProofOS requests an observation from a separate Cloud Run collector.
+That collector runs under a different service identity.
+
+00:01:22.000 --> 00:01:34.000
+The collector authenticates with Google OIDC, probes the IAM-protected endpoint,
+and signs what it observed with Ed25519.
+
+00:01:34.000 --> 00:01:45.000
+The API can verify that attestation, but it cannot author one.
+Only the independently observed evidence is accepted.
+
+00:01:45.000 --> 00:01:56.000
+Now the adversarial case.
+The completion claim contains a prompt injection aimed at the verifier model.
+
+00:01:56.000 --> 00:02:08.000
+The injected instruction tells the verifier to skip its tools,
+ignore missing or untrusted evidence, and return VERIFIED immediately.
+
+00:02:08.000 --> 00:02:19.000
+The injection works on the model.
+The verifier makes zero authoritative verification-tool calls.
+
+00:02:19.000 --> 00:02:28.000
+The model then writes prose describing a result it never obtained.
+
+00:02:28.000 --> 00:02:35.000
+The system still refuses.
+ABSTAIN — MODEL_NONCOMPLIANCE.
+
+00:02:35.000 --> 00:02:46.000
+Model compliance is not a security boundary.
+Authority lives in deterministic verification.
+
+00:02:46.000 --> 00:02:58.000
+This separation is not a convention inside one process.
+The observer is a different service with a different identity.
+
+00:02:58.000 --> 00:03:10.000
+Anonymous access is denied. The collector’s authenticated request is allowed.
+Its signing key exists only in the collector service.
+
+00:03:10.000 --> 00:03:21.000
+Firestore provides the hash-chained journal.
+Cloud Logging correlates the execution across services.
+
+00:03:21.000 --> 00:03:31.000
+Secret Manager separates credentials, and Artifact Registry pins deployment images.
+
+00:03:31.000 --> 00:03:39.000
+The question is not whether an agent can produce a convincing answer.
+The question is whether the claimed outcome can be independently evidenced.
+
+00:03:39.000 --> 00:03:45.000
+AI agents execute. ProofOS proves.
