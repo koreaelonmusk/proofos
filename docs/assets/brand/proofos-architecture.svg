@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="t d">
+<title id="t">ProofOS architecture</title><desc id="d">Execution, verification, observation, audit and outcome planes for ProofOS</desc>
+<defs><style>
+.t{font-family:Inter,Segoe UI,Arial,sans-serif}.h{font-size:54px;font-weight:800;fill:#0d1b3a}.s{font-size:23px;fill:#44506a}.z{font-size:24px;font-weight:700}.c{font-size:22px;font-weight:700}.b{font-size:17px;fill:#23314c}.m{font-size:15px;font-weight:700;fill:#60708d}.box{fill:#fff;stroke-width:2}.blue{stroke:#2f6de0}.teal{stroke:#12849a}.orange{stroke:#f06a2a}.purple{stroke:#6750c7}.green{stroke:#2f8a61}.red{stroke:#d64a42}.arrow{stroke:#182338;stroke-width:3;fill:none;marker-end:url(#a)}
+</style><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#182338"/></marker></defs>
+<rect width="1600" height="900" fill="#f8fafc"/>
+<text x="800" y="72" text-anchor="middle" class="t h">ProofOS Architecture</text>
+<text x="800" y="112" text-anchor="middle" class="t s">Post-execution evidence verification runtime for autonomous agents</text>
+<rect x="310" y="135" width="980" height="58" rx="14" fill="#fff" stroke="#2f6de0" stroke-width="2"/><text x="800" y="173" text-anchor="middle" class="t c" fill="#1e4fa8">Execution authority != Observation authority != Verification authority</text>
+
+<rect x="70" y="235" width="385" height="530" rx="24" fill="#fbfdff" stroke="#2f6de0" stroke-width="2" stroke-dasharray="8 7"/>
+<text x="90" y="220" class="t z" fill="#1f57b7">Zone 1 · Execution Plane</text>
+<rect x="105" y="280" width="315" height="95" rx="16" class="box blue"/><text x="262" y="320" text-anchor="middle" class="t c">User / Workflow Trigger</text><text x="262" y="348" text-anchor="middle" class="t b">Goal enters the system</text>
+<rect x="105" y="410" width="315" height="255" rx="20" class="box blue"/><text x="262" y="448" text-anchor="middle" class="t c" fill="#1f57b7">Gemini 3.5 Flash via Google ADK</text>
+<rect x="135" y="475" width="255" height="72" rx="12" fill="#f5f8ff" stroke="#8eb0ef"/><text x="262" y="505" text-anchor="middle" class="t c">Planner</text><text x="262" y="532" text-anchor="middle" class="t b">Plans tasks and evidence needs</text>
+<rect x="135" y="565" width="255" height="72" rx="12" fill="#f5f8ff" stroke="#8eb0ef"/><text x="262" y="595" text-anchor="middle" class="t c">Executor</text><text x="262" y="622" text-anchor="middle" class="t b">Performs actions, cannot verify</text>
+<rect x="105" y="690" width="315" height="52" rx="12" fill="#fff5f4" stroke="#d64a42"/><text x="262" y="723" text-anchor="middle" class="t c" fill="#c33631">Agent claims are not proof</text>
+
+<rect x="520" y="235" width="500" height="530" rx="24" fill="#fbfeff" stroke="#12849a" stroke-width="2" stroke-dasharray="8 7"/>
+<text x="540" y="220" class="t z" fill="#12748a">Zone 2 · Verification Plane</text>
+<rect x="560" y="280" width="420" height="410" rx="20" class="box teal"/>
+<text x="770" y="320" text-anchor="middle" class="t c" fill="#12748a">ProofOS API · Cloud Run</text>
+<rect x="600" y="350" width="340" height="55" rx="11" fill="#f3fbfc" stroke="#74bcc7"/><text x="770" y="384" text-anchor="middle" class="t c">Deterministic Verification Kernel</text>
+<rect x="600" y="425" width="340" height="55" rx="11" fill="#f3fbfc" stroke="#74bcc7"/><text x="770" y="459" text-anchor="middle" class="t c">Evidence Normalization</text>
+<rect x="600" y="500" width="340" height="55" rx="11" fill="#f3fbfc" stroke="#74bcc7"/><text x="770" y="534" text-anchor="middle" class="t c">Authority + Integrity Checks</text>
+<rect x="600" y="575" width="340" height="55" rx="11" fill="#f3fbfc" stroke="#74bcc7"/><text x="770" y="609" text-anchor="middle" class="t c">Requirement Evaluation</text>
+<rect x="620" y="650" width="300" height="82" rx="14" fill="#fff5f4" stroke="#d64a42" stroke-width="2"/><text x="770" y="683" text-anchor="middle" class="t c" fill="#c33631">ABSTAIN</text><text x="770" y="710" text-anchor="middle" class="t b">Self-report alone is insufficient</text>
+
+<rect x="1080" y="235" width="360" height="530" rx="24" fill="#fffdf9" stroke="#f06a2a" stroke-width="2" stroke-dasharray="8 7"/>
+<text x="1100" y="220" class="t z" fill="#df5e20">Zone 3 · Observation Plane</text>
+<rect x="1120" y="315" width="280" height="315" rx="20" class="box orange"/><text x="1260" y="357" text-anchor="middle" class="t c" fill="#df5e20">Private Collector Service</text><text x="1260" y="383" text-anchor="middle" class="t b">Cloud Run</text>
+<rect x="1150" y="420" width="220" height="50" rx="10" fill="#fff9f5" stroke="#f6a37a"/><text x="1260" y="451" text-anchor="middle" class="t b">Separate service identity</text>
+<rect x="1150" y="490" width="220" height="50" rx="10" fill="#fff9f5" stroke="#f6a37a"/><text x="1260" y="521" text-anchor="middle" class="t b">OIDC-protected observation</text>
+<rect x="1150" y="560" width="220" height="50" rx="10" fill="#fff9f5" stroke="#f6a37a"/><text x="1260" y="591" text-anchor="middle" class="t b">Ed25519 attestation</text>
+
+<rect x="520" y="790" width="920" height="85" rx="18" fill="#fbfaff" stroke="#6750c7" stroke-width="2"/>
+<rect x="550" y="810" width="250" height="48" rx="10" fill="#fff" stroke="#8d7ade"/><text x="675" y="840" text-anchor="middle" class="t b">Evidence Ledger · content hashes</text>
+<rect x="845" y="810" width="250" height="48" rx="10" fill="#fff" stroke="#8d7ade"/><text x="970" y="840" text-anchor="middle" class="t b">Firestore · hash-chained audit</text>
+<rect x="1140" y="810" width="270" height="48" rx="10" fill="#fff" stroke="#8d7ade"/><text x="1275" y="840" text-anchor="middle" class="t b">Cloud Logging · correlation</text>
+
+<rect x="1470" y="360" width="110" height="255" rx="18" fill="#fff" stroke="#12849a" stroke-width="2"/><text x="1525" y="395" text-anchor="middle" class="t m">RESULT</text><text x="1525" y="455" text-anchor="middle" class="t c" fill="#2f8a61">VERIFIED</text><text x="1525" y="485" text-anchor="middle" class="t m">authorized</text><text x="1525" y="510" text-anchor="middle" class="t m">evidence</text><line x1="1488" y1="535" x2="1562" y2="535" stroke="#d7dee9"/><text x="1525" y="575" text-anchor="middle" class="t c" fill="#c33631">ABSTAIN</text><text x="1525" y="600" text-anchor="middle" class="t m">otherwise</text>
+
+<path d="M262 375V410" class="arrow"/><path d="M420 590H555" class="arrow"/><text x="475" y="574" class="t m">completion claim</text>
+<path d="M920 690H1100V630" class="arrow"/><text x="995" y="674" class="t m">request observation</text>
+<path d="M1120 470H980" class="arrow"/><text x="1005" y="451" class="t m">observed evidence</text>
+<path d="M770 732V790" class="arrow"/><path d="M1260 630V790" class="arrow"/><path d="M1020 610H1470" class="arrow"/>
+<text x="80" y="830" class="t m">Core laws: CLAIM != EVIDENCE · SIGNED != TRUSTED · TRUSTED != AUTHORIZED · REPLAY != NEW OBSERVATION · NOT RUN != PASS</text>
+</svg>
