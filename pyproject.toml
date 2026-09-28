@@ -1,2 +1,16 @@
+[project]
+name = "proofos-collector"
+version = "0.1.0"
+requires-python = ">=3.12"
+# Vercel deploys only the collector. The agent and orchestrator dependencies
+# remain in requirements.txt for their separate services and the full CI suite.
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "cryptography>=43,<51",
+    "google-auth>=2,<3",
+    "requests>=2.32,<3",
+]
+
 [tool.vercel]
 entrypoint = "proofos_collector.app:app"
