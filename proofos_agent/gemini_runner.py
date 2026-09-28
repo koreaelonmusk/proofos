@@ -166,12 +166,12 @@ class GeminiAdkTurnRunner:
 
         # Built here, per execution. The verifier's tool closes over this
         # execution's ledger and must not outlive it.
-        self._planner = build_planner_agent(self._registry)
+        self._planner = build_planner_agent(self._registry, model=model)
         self._executor = build_executor_agent(
-            build_action_tool(fleet, task_id), self._registry
+            build_action_tool(fleet, task_id), self._registry, model=model
         )
         self._verifier, self._verify_tool = build_verifier_agent_with_tool(
-            ledger, self._registry
+            ledger, self._registry, model=model
         )
 
         self._runners: dict[str, InMemoryRunner] = {}

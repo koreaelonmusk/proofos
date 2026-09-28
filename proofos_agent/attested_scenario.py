@@ -134,6 +134,7 @@ def build_turn_runner(
     ledger: EvidenceLedger,
     task_id: str,
     registry: AgentRegistry | None = None,
+    model: str | None = None,
 ):
     """Build the turn runner for the requested runtime.
 
@@ -147,6 +148,7 @@ def build_turn_runner(
     verify_tool = build_verification_tool(ledger)
 
     if agent_runtime == "gemini":
+        from .agent import MODEL
         from .gemini_runner import GeminiAdkTurnRunner, preflight
 
         credential_mode = preflight()
@@ -156,6 +158,7 @@ def build_turn_runner(
             task_id=task_id,
             registry=registry,
             credential_mode=credential_mode,
+            model=MODEL if model is None else model,
         )
 
     return DeterministicTurnRunner(fleet, verify_tool)
@@ -173,6 +176,7 @@ async def run_attested_agent_scenario(
     probe_runner: ProbeRunner | None = None,
     collector_id: str = COLLECTOR_ID,
     profile_id: str = RUNTIME_HEALTH_PROFILE,
+    model: str | None = None,
 ) -> tuple[dict[str, Any], Journal, EvidenceLedger]:
     """The full path: agents play the roles, evidence stays attested."""
     registry = registry or default_registry()
@@ -186,7 +190,9 @@ async def run_attested_agent_scenario(
         profile_id=profile_id,
     )
 
-    turn_runner = build_turn_runner(agent_runtime, fleet, ledger, task_id, registry)
+    turn_runner = build_turn_runner(
+        agent_runtime, fleet, ledger, task_id, registry, model=model
+    )
 
     def seed_ci_evidence() -> None:
         fleet.ci_collector.record_ci_result(task_id, CI_SUMMARY)

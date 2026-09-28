@@ -42,3 +42,13 @@ python -m unittest tests.test_collector_readiness tests.test_collector_service -
 
 The historical Cloud Run record is `artifacts/cloud-proof.json`; it is not a
 substitute for rerunning the launch checks against the current deployment.
+
+## Explicit live model selection
+
+`PROOFOS_GEMINI_MODEL` selects the model used by all three live ADK roles.
+When unset, the existing `gemini-3.5-flash` default is preserved; an empty value
+fails startup. `/config` and execution metadata report the selected model.
+This setting does not enable Gemini mode, grant credentials, or provide an
+automatic fallback. A provider outage still ends in ABSTAIN. Before switching
+production, validate the chosen model's availability and tool-calling behavior
+against the complete authenticated execution path.

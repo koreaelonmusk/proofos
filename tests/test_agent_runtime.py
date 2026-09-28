@@ -206,7 +206,7 @@ class OrchestrationUnderMisbehaviourTests(unittest.TestCase):
         client = HttpCollectorClient(self.collector.base_url)
         runners = {}
 
-        def factory(agent_runtime, fleet, ledger, task_id, registry=None):
+        def factory(agent_runtime, fleet, ledger, task_id, registry=None, model=None):
             runner = ScriptedRunner(fleet, build_verification_tool(ledger), behaviour)
             runners["runner"] = runner
             return runner
@@ -568,3 +568,36 @@ class ToolTranscriptFidelityTests(unittest.TestCase):
             ACTION_TOOL, {"instruction": "x", "api_key": "should-not-appear"}, {"result": "ok"}
         )
         self.assertNotIn("api_key", call.summary()["args"])
+
+
+class ConfiguredModelTests(unittest.TestCase):
+    def test_selected_model_reaches_every_live_agent_and_metadata(self):
+        from unittest.mock import patch
+        from proofos.journal import Journal
+        from proofos_agent.fleet import build_fleet
+        from proofos_service.config import build_runtime_config
+
+        selected = "gemini-test-explicit-model"
+        with patch("proofos_agent.gemini_runner.preflight", return_value="test"):
+            config = build_runtime_config({
+                "PROOFOS_COLLECTOR_MODE": "inprocess-test-only",
+                "PROOFOS_AGENT_RUNTIME": "gemini",
+                "PROOFOS_GEMINI_MODEL": selected,
+            })
+            ledger = EvidenceLedger()
+            fleet = build_fleet(ledger, Journal(InMemoryJournalSink(), task_id=TASK),
+                                default_registry(), TASK)
+            runner = build_turn_runner("gemini", fleet, ledger, TASK, model=config.model)
+        self.assertEqual(config.describe()["model"], selected)
+        self.assertEqual(runner.describe()["model"], selected)
+        for agent in (runner._planner, runner._executor, runner._verifier):
+            self.assertEqual(agent.model, selected)
+
+    def test_empty_model_is_rejected_and_default_is_preserved(self):
+        from proofos_service.config import ConfigurationError, build_runtime_config
+
+        base = {"PROOFOS_COLLECTOR_MODE": "inprocess-test-only"}
+        self.assertEqual(build_runtime_config(base).model, MODEL)
+        for empty in ("", "  "):
+            with self.subTest(value=empty), self.assertRaises(ConfigurationError):
+                build_runtime_config({**base, "PROOFOS_GEMINI_MODEL": empty})
