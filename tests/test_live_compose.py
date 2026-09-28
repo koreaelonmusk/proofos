@@ -72,6 +72,11 @@ class LiveOverlayTests(unittest.TestCase):
             env_of(self.overlay, "api")["PROOFOS_AGENT_RUNTIME"], "gemini"
         )
 
+        self.assertEqual(
+            env_of(self.overlay, "api")["PROOFOS_GEMINI_MODEL"],
+            "${PROOFOS_GEMINI_MODEL-gemini-3.5-flash}",
+        )
+
     def test_the_overlay_offers_both_credential_paths(self):
         environment = env_of(self.overlay, "api")
         for name in GEMINI_ENV:
