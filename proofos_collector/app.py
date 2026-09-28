@@ -24,6 +24,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -150,6 +151,11 @@ app = FastAPI(
     description="Performs approved observations and signs what it saw.",
     version="0.1.0",
 )
+
+
+@app.get("/", include_in_schema=False)
+def evidence_console() -> RedirectResponse:
+    return RedirectResponse("https://koreaelonmusk.github.io/proofos/", status_code=307)
 
 
 @app.get("/healthz")
