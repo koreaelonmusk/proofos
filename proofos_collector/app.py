@@ -24,9 +24,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
+
+from proofos_collector.readiness import configuration_issues
 
 from proofos.attestation import AttestationSigner, Outcome
 from proofos.keys import FileSigningKeyProvider, write_public_key
@@ -142,6 +144,10 @@ def _identity_token_for(target: str) -> str:
     )
 
 
+# Snapshot the same configuration used to construct the signer and profiles.
+# A later environment mutation must not turn an ephemeral signer into "ready".
+READINESS_ISSUES = configuration_issues(os.environ)
+CLOUD_RUNTIME = bool(os.environ.get("VERCEL") or os.environ.get("K_SERVICE"))
 SIGNER = _load_signer()
 PROFILES = _load_profiles(SIGNER.collector_id)
 _publish_public_key(SIGNER)
@@ -172,9 +178,26 @@ def list_profiles() -> dict[str, Any]:
     }
 
 
+@app.get("/readyz", include_in_schema=False)
+def readyz() -> JSONResponse:
+    return JSONResponse(
+        {
+            "status": "not_ready" if READINESS_ISSUES else "ready",
+            "service": SERVICE_NAME,
+            "issues": list(READINESS_ISSUES),
+        },
+        status_code=503 if READINESS_ISSUES else 200,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.post("/v1/collect")
 async def collect(request: CollectRequest) -> dict[str, Any]:
     """Perform an approved observation and return a signed attestation."""
+    if CLOUD_RUNTIME and READINESS_ISSUES:
+        raise HTTPException(
+            status_code=503, detail="collector is not configured for live collection"
+        )
     try:
         profile = PROFILES.resolve(
             request.profile_id, request.evidence_kind, SIGNER.collector_id
