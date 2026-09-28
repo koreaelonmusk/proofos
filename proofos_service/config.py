@@ -30,6 +30,7 @@ PROFILE_ENV = "PROOFOS_COLLECTOR_PROFILE"
 TIMEOUT_ENV = "PROOFOS_COLLECTOR_CLIENT_TIMEOUT"
 AUTH_ENV = "PROOFOS_COLLECTOR_AUTH"
 AGENT_RUNTIME_ENV = "PROOFOS_AGENT_RUNTIME"
+MODEL_ENV = "PROOFOS_GEMINI_MODEL"
 
 
 class CollectorMode(StrEnum):
@@ -124,6 +125,10 @@ def build_runtime_config(env: dict[str, str] | None = None) -> RuntimeConfig:
 
     from proofos_agent.agent import MODEL as GEMINI_MODEL
 
+    model = source.get(MODEL_ENV, GEMINI_MODEL).strip()
+    if not model:
+        raise ConfigurationError(f"{MODEL_ENV} must not be empty")
+
     if agent_runtime is AgentRuntime.GEMINI:
         # Fail here, not at the first request. A service advertising a live
         # model must not start without one.
@@ -140,7 +145,7 @@ def build_runtime_config(env: dict[str, str] | None = None) -> RuntimeConfig:
             collector_id=collector_id,
             profile_id=profile_id,
             agent_runtime=agent_runtime,
-            model=GEMINI_MODEL,
+            model=model,
         )
 
     url = source.get(URL_ENV, "").strip()
@@ -177,5 +182,5 @@ def build_runtime_config(env: dict[str, str] | None = None) -> RuntimeConfig:
         client_timeout=timeout,
         auth=auth,
         agent_runtime=agent_runtime,
-        model=GEMINI_MODEL,
+        model=model,
     )

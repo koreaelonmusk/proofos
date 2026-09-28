@@ -74,7 +74,7 @@ def _check_tools(registry: AgentRegistry, agent_id: str, tools: list[Callable]) 
 
 
 def build_verifier_agent_with_tool(
-    ledger: EvidenceLedger, registry: AgentRegistry | None = None
+    ledger: EvidenceLedger, registry: AgentRegistry | None = None, *, model: str = MODEL
 ) -> tuple[Agent, Callable]:
     """The verifier agent and the tool it was built with.
 
@@ -89,7 +89,7 @@ def build_verifier_agent_with_tool(
 
     agent = Agent(
         name="proofos_verifier",
-        model=MODEL,
+        model=model,
         description="Evidence-first completion verifier.",
         instruction=VERIFIER_INSTRUCTION,
         tools=[verify_task_completion],
@@ -98,14 +98,14 @@ def build_verifier_agent_with_tool(
 
 
 def build_verifier_agent(
-    ledger: EvidenceLedger, registry: AgentRegistry | None = None
+    ledger: EvidenceLedger, registry: AgentRegistry | None = None, *, model: str = MODEL
 ) -> Agent:
     """The verifier agent, bound to one ledger for one execution."""
-    return build_verifier_agent_with_tool(ledger, registry)[0]
+    return build_verifier_agent_with_tool(ledger, registry, model=model)[0]
 
 
 def build_executor_agent(
-    perform_action: Callable, registry: AgentRegistry | None = None
+    perform_action: Callable, registry: AgentRegistry | None = None, *, model: str = MODEL
 ) -> Agent:
     """The executor agent.
 
@@ -118,21 +118,23 @@ def build_executor_agent(
 
     return Agent(
         name="proofos_executor",
-        model=MODEL,
+        model=model,
         description="Performs assigned work and reports what it did.",
         instruction=EXECUTOR_INSTRUCTION,
         tools=[perform_action],
     )
 
 
-def build_planner_agent(registry: AgentRegistry | None = None) -> Agent:
+def build_planner_agent(
+    registry: AgentRegistry | None = None, *, model: str = MODEL
+) -> Agent:
     """The planner agent. No tools: planning confers no authority."""
     registry = registry or default_registry()
     _check_tools(registry, PLANNER_ID, [])
 
     return Agent(
         name="proofos_planner",
-        model=MODEL,
+        model=model,
         description="Plans work and proposes what would prove it was done.",
         instruction=PLANNER_INSTRUCTION,
         tools=[],

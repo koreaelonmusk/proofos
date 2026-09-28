@@ -17,6 +17,7 @@ services:
   api:
     environment:
       PROOFOS_AGENT_RUNTIME: gemini
+      PROOFOS_GEMINI_MODEL: ${PROOFOS_GEMINI_MODEL-gemini-3.5-flash}
 
       # Free-tier Gemini caps requests per minute. Spacing turns keeps a run
       # under the cap; raise it if your key is more constrained, or set 0 on a

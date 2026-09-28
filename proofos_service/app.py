@@ -215,6 +215,7 @@ async def _run_remote_execution(request: ExecutionRequest) -> dict[str, Any]:
         max_attempts=request.max_attempts,
         probe_runner=_offload,
         agent_runtime=str(CONFIG.agent_runtime),
+        model=CONFIG.model,
         collector_id=CONFIG.collector_id,
         profile_id=CONFIG.profile_id,
     )
