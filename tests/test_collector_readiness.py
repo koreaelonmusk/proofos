@@ -67,5 +67,10 @@ os.environ['PROOFOS_COLLECTOR_TARGET'] = 'https://example.com/healthz'
 assert CLOUD_RUNTIME
 assert readyz().status_code == 503
 '''
-        result = subprocess.run([sys.executable, '-c', code], env=env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        for invalid in ({}, {'PROOFOS_COLLECTOR_TARGET': 'http://'},
+                        {'PROOFOS_COLLECTOR_TIMEOUT': 'bad'},
+                        {'PROOFOS_COLLECTOR_TIMEOUT': '0'}):
+            with self.subTest(invalid=invalid):
+                result = subprocess.run([sys.executable, '-c', code],
+                    env={**env, **invalid}, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)

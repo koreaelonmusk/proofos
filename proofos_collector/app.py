@@ -94,7 +94,10 @@ def _load_signer() -> AttestationSigner:
         # Default: a configured path must already hold a key. On Cloud Run the
         # key arrives as a mounted secret, and a missing mount is a deployment
         # fault to surface, not one to paper over with a new identity.
-        create = os.environ.get(CREATE_KEY_ENV, "").strip().lower() in {"1", "true", "yes"}
+        create = (
+            not CLOUD_RUNTIME
+            and os.environ.get(CREATE_KEY_ENV, "").strip().lower() in {"1", "true", "yes"}
+        )
         provider = FileSigningKeyProvider(key_file, create_if_missing=create)
         return AttestationSigner(provider.load_private_key(), collector_id)
     return AttestationSigner.generate(collector_id)
@@ -149,7 +152,11 @@ def _identity_token_for(target: str) -> str:
 READINESS_ISSUES = configuration_issues(os.environ)
 CLOUD_RUNTIME = bool(os.environ.get("VERCEL") or os.environ.get("K_SERVICE"))
 SIGNER = _load_signer()
-PROFILES = _load_profiles(SIGNER.collector_id)
+PROFILES = (
+    ProfileRegistry().seal()
+    if CLOUD_RUNTIME and READINESS_ISSUES
+    else _load_profiles(SIGNER.collector_id)
+)
 _publish_public_key(SIGNER)
 
 app = FastAPI(
