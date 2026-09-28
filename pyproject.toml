@@ -1,0 +1,2 @@
+[tool.vercel]
+entrypoint = "proofos_collector.app:app"
