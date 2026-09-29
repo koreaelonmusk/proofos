@@ -49,10 +49,23 @@ jobs:
             --record-protection-block \
             --expected-git-sha "$GITHUB_SHA"
 
+      - name: Observe live trust surface
+        env:
+          DEPLOYMENT_URL: ${{ steps.deployment.outputs.url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          python scripts/verify_vercel_live_trust.py \
+            --url "$DEPLOYMENT_URL" \
+            --output "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json" \
+            --expected-git-sha "$GITHUB_SHA"
+
+
       - name: Upload live smoke evidence
         uses: actions/upload-artifact@v7
         with:
-          path: artifacts/live-smoke/vercel-${{ github.run_id }}.json
+          path: |
+            artifacts/live-smoke/vercel-${{ github.run_id }}.json
+            artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json
           archive: false
           if-no-files-found: error
           retention-days: 30
