@@ -77,6 +77,40 @@ same full workflow source Git SHA. It then derives a pair digest from the two
 constituent evidence hashes. Individually valid artifacts from different
 deployments therefore cannot be presented as one observation set.
 
+## Authenticated E2E workflow authorization
+
+The manual `Authenticated E2E Evidence` workflow is subordinate to the sealed
+live launch verdict. A deployment URL and a successful build are not authority.
+
+The workflow is split into two GitHub Actions jobs with different authority.
+
+The `authorize` job has only `contents: read` and `actions: read`. It has no
+`id-token: write` permission and references no repository secrets. It verifies
+that the supplied source run is a successfully completed
+`Vercel Live Smoke Evidence` deployment-status run for the exact requested Git
+SHA, downloads the sealed health/trust/manifest/verdict artifacts, and
+independently re-verifies the bundle.
+
+Only a verdict of `READY_FOR_AUTHENTICATED_E2E`, bound to the exact requested
+Vercel origin and source SHA, produces the authorization output required to
+create the second `privileged-e2e` job. A `HOLD` result means the OIDC-capable
+job never runs.
+
+The `privileged-e2e` job alone has `id-token: write`. After authorization,
+GitHub OIDC is exchanged through Google Workload Identity Federation for a
+short-lived service-account ID token. Stored caller bearer-token secrets and
+service-account JSON keys remain forbidden. The ID-token audience comes from the
+verified authorization output, not directly from the workflow-dispatch input.
+
+When Deployment Protection is enabled, `VERCEL_AUTOMATION_BYPASS_SECRET` is
+used only as the official edge-bypass request header after the launch gate. It is
+never passed on the command line or persisted in authenticated evidence.
+
+The workflow always checks out the current trusted verifier implementation.
+`expected_git_sha` identifies the deployment under test and is verified against
+the sealed evidence bundle; it is not used to roll the verifier code back to an
+older deployment revision.
+
 ## Explicit live model selection
 
 `PROOFOS_GEMINI_MODEL` selects the model used by all three live ADK roles.
