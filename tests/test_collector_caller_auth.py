@@ -38,6 +38,7 @@ class CallerAuthConfigurationTests(unittest.TestCase):
         for bad_audience in (
             "",
             "http://proofos.example.vercel.app",
+            "https://collector.example.com",
             AUDIENCE + "/v1/collect",
             AUDIENCE + "?debug=1",
             "https://user:pass@proofos.example.vercel.app",
