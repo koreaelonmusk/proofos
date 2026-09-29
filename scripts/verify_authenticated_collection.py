@@ -270,23 +270,12 @@ def observe(
             "task_id": task_id,
             "evidence_kind": EVIDENCE_KIND,
             "profile_id": PROFILE_ID,
-            # Store only a digest. The one-time challenge itself is unnecessary
-            # for audit after exact binding has been independently verified.
-            "request_nonce_sha256": hashlib.sha256(nonce.encode("utf-8")).hexdigest(),
+            "request_nonce": nonce,
         },
-        "attestation": {
-            "version": attestation.version,
-            "collector_id": attestation.collector_id,
-            "profile_id": attestation.profile_id,
-            "kind": attestation.kind,
-            "outcome": str(attestation.outcome),
-            "status_code": attestation.status_code,
-            "response_digest": attestation.response_digest,
-            "observed_at": attestation.observed_at,
-            "signature_sha256": hashlib.sha256(
-                attestation.signature.encode("ascii")
-            ).hexdigest(),
-        },
+        "attestation": attestation.to_dict(),
+        "trusted_public_key_sha256": hashlib.sha256(
+            public_key.encode("ascii")
+        ).hexdigest(),
         "cryptographic_checks": {
             "signature_verified": True,
             **tamper,
@@ -296,7 +285,8 @@ def observe(
             "proves execution, task, evidence kind, profile, and nonce were bound to the signed attestation",
             "proves nonce and profile tampering invalidate the signature",
             "does not by itself promote the observed outcome into a ProofOS VERIFIED execution",
-            "does not expose bearer tokens, private signing keys, public-key configuration, or the raw nonce",
+            "retains the one-time nonce and signed attestation for independent replay-safe audit",
+            "does not expose bearer tokens, private signing keys, or trusted public-key configuration",
         ],
     }
     return {**unsigned, "evidence_sha256": _sha256(unsigned)}
