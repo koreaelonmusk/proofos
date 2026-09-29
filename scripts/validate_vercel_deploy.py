@@ -14,6 +14,9 @@ import tomllib
 from fastapi import FastAPI
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 PYPROJECT = ROOT / "pyproject.toml"
 EXPECTED_ENTRYPOINT = "proofos_collector.app:app"
 REQUIRED_DEPENDENCIES = {
