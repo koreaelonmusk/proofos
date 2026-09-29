@@ -50,6 +50,8 @@ TURN_DELAY_ENV = "PROOFOS_GEMINI_TURN_DELAY_SECONDS"
 
 RATE_LIMIT_RETRIES = 4
 RATE_LIMIT_BACKOFF_SECONDS = 20.0
+SERVER_ERROR_RETRIES = 2
+SERVER_ERROR_BACKOFF_SECONDS = 5.0
 MAX_BACKOFF_SECONDS = 75.0
 
 
@@ -58,12 +60,20 @@ def _is_rate_limit(exc: Exception) -> bool:
     return "ResourceExhausted" in name or "429" in str(exc)[:64]
 
 
-def _retry_delay(exc: Exception, attempt: int) -> float:
+def _is_transient_server_error(exc: Exception) -> bool:
+    """Retry only provider failures that are explicitly temporary."""
+    status = getattr(exc, "status_code", None)
+    return type(exc).__name__ == "ServerError" and status in {500, 502, 503, 504}
+
+
+def _retry_delay(
+    exc: Exception, attempt: int, base_seconds: float = RATE_LIMIT_BACKOFF_SECONDS
+) -> float:
     """Honour the server's RetryInfo when it offers one."""
     match = re.search(r"retryDelay['\"]?:\s*['\"]?(\d+(?:\.\d+)?)s", str(exc))
     if match:
         return min(float(match.group(1)) + 1.0, MAX_BACKOFF_SECONDS)
-    return min(RATE_LIMIT_BACKOFF_SECONDS * attempt, MAX_BACKOFF_SECONDS)
+    return min(base_seconds * attempt, MAX_BACKOFF_SECONDS)
 
 
 class CredentialsMissingError(RuntimeError):
@@ -220,7 +230,9 @@ class GeminiAdkTurnRunner:
         error = ""
         session_id = ""
 
-        for rate_attempt in range(1, RATE_LIMIT_RETRIES + 2):
+        rate_retries = 0
+        server_retries = 0
+        while True:
             calls, pending, final_text, error = [], [], "", ""
             try:
                 runner, session_id = await self._session_for(role, agent)
@@ -255,8 +267,22 @@ class GeminiAdkTurnRunner:
                 # The exception type only. Provider messages can carry request
                 # echoes, and this string is journaled.
                 error = f"{type(exc).__name__}"
-                if _is_rate_limit(exc) and rate_attempt <= RATE_LIMIT_RETRIES:
-                    await asyncio.sleep(_retry_delay(exc, rate_attempt))
+                if _is_rate_limit(exc) and rate_retries < RATE_LIMIT_RETRIES:
+                    rate_retries += 1
+                    await asyncio.sleep(_retry_delay(exc, rate_retries))
+                    continue
+                if (
+                    _is_transient_server_error(exc)
+                    and server_retries < SERVER_ERROR_RETRIES
+                ):
+                    server_retries += 1
+                    await asyncio.sleep(
+                        _retry_delay(
+                            exc,
+                            server_retries,
+                            base_seconds=SERVER_ERROR_BACKOFF_SECONDS,
+                        )
+                    )
                     continue
                 break
 
