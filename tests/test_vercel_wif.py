@@ -80,14 +80,19 @@ class CollectorEnvironmentContractTests(unittest.TestCase):
             "PROOFOS_COLLECTOR_TARGET": f"{TARGET}/health",
             "PROOFOS_COLLECTOR_TARGET_REQUIRES_AUTH": "true",
         }
-        self.assertIn("vercel_wif_not_configured", configuration_issues(base))
+        base_issues = configuration_issues(base)
+        self.assertIn("vercel_wif_not_configured", base_issues)
+        self.assertIn("vercel_oidc_token_unavailable", base_issues)
 
         ready = {
             **base,
             WIF_PROVIDER_ENV: PROVIDER,
             SERVICE_ACCOUNT_ENV: SERVICE_ACCOUNT,
+            "VERCEL_OIDC_TOKEN": OIDC_TOKEN,
         }
-        self.assertNotIn("vercel_wif_not_configured", configuration_issues(ready))
+        ready_issues = configuration_issues(ready)
+        self.assertNotIn("vercel_wif_not_configured", ready_issues)
+        self.assertNotIn("vercel_oidc_token_unavailable", ready_issues)
 
 
 class VercelWorkloadIdentityTests(unittest.TestCase):
