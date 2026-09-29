@@ -72,6 +72,17 @@ jobs:
             "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json" \
             --expected-git-sha "$GITHUB_SHA"
 
+      - name: Build conservative live launch verdict
+        run: |
+          python scripts/build_live_launch_verdict.py \
+            "artifacts/live-smoke/vercel-${{ github.run_id }}.json" \
+            "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json" \
+            --expected-git-sha "$GITHUB_SHA" \
+            --output "artifacts/live-smoke/vercel-launch-verdict-${{ github.run_id }}.json"
+
+      - name: Verify persisted launch verdict independently
+        run: python scripts/verify_live_launch_verdict.py "artifacts/live-smoke/vercel-launch-verdict-${{ github.run_id }}.json"
+
       - name: Upload live health evidence
         uses: actions/upload-artifact@v7
         with:
@@ -86,6 +97,15 @@ jobs:
         with:
           name: vercel-live-trust-${{ github.run_id }}
           path: artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload live launch verdict
+        uses: actions/upload-artifact@v7
+        with:
+          name: vercel-live-launch-verdict-${{ github.run_id }}
+          path: artifacts/live-smoke/vercel-launch-verdict-${{ github.run_id }}.json
           archive: false
           if-no-files-found: error
           retention-days: 30
