@@ -12,11 +12,12 @@ import sys
 import tomllib
 
 from fastapi import FastAPI
-from proofos_collector.runtime_provenance import public_runtime_provenance
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from proofos_collector.runtime_provenance import public_runtime_provenance
 
 PYPROJECT = ROOT / "pyproject.toml"
 EXPECTED_ENTRYPOINT = "proofos_collector.app:app"
