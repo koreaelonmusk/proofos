@@ -6,6 +6,9 @@ Live mode requires two caller-controlled environment variables:
 
 Neither value is accepted on the command line, written to artifacts, or logged.
 The public key is configuration, never discovered from the collector under test.
+When Vercel Deployment Protection is enabled, VERCEL_AUTOMATION_BYPASS_SECRET
+may be supplied. It is used only as the official edge-bypass request header and
+is never persisted or printed.
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ PROFILE_ID = "runtime-health-v1"
 EVIDENCE_KIND = "runtime"
 TOKEN_ENV = "PROOFOS_E2E_CALLER_ID_TOKEN"
 PUBLIC_KEY_ENV = "PROOFOS_E2E_COLLECTOR_PUBLIC_KEY"
+VERCEL_BYPASS_ENV = "VERCEL_AUTOMATION_BYPASS_SECRET"
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_ATTESTATION_AGE_SECONDS = 120.0
 
@@ -112,6 +116,11 @@ def _request_json(
             "Content-Type": "application/json",
             "Authorization": f"Bearer {bearer_token}",
             "User-Agent": "proofos-authenticated-e2e/1",
+            **(
+                {"x-vercel-protection-bypass": os.environ[VERCEL_BYPASS_ENV].strip()}
+                if os.environ.get(VERCEL_BYPASS_ENV, "").strip()
+                else {}
+            ),
         },
     )
     try:
