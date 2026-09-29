@@ -1,4 +1,4 @@
-"""Validate the authenticated E2E workflow's identity and launch-gate contract."""
+"""Validate the authenticated E2E workflow's two-job authority contract."""
 
 from __future__ import annotations
 
@@ -8,29 +8,44 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/authenticated-e2e.yml"
 
-REQUIRED_SNIPPETS = (
-    "actions: read",
-    "id-token: write",
+GLOBAL_REQUIRED = (
+    "permissions: {}",
     "live_evidence_run_id:",
-    "uses: actions/download-artifact@v7",
-    "uv run python scripts/authorize_authenticated_e2e.py",
+    "authorize:",
+    "privileged-e2e:",
+)
+PRIVILEGED_REQUIRED = (
+    "needs: authorize",
+    "if: needs.authorize.outputs.authorized == 'true'",
+    "id-token: write",
     "uses: google-github-actions/auth@v3",
     "workload_identity_provider: ${{ secrets.PROOFOS_E2E_GCP_WIF_PROVIDER }}",
     "service_account: ${{ secrets.PROOFOS_E2E_GCP_SERVICE_ACCOUNT }}",
     "token_format: id_token",
-    "id_token_audience: ${{ inputs.deployment_url }}",
+    "id_token_audience: ${{ needs.authorize.outputs.target_origin }}",
     "id_token_include_email: true",
     "create_credentials_file: false",
     "export_environment_variables: false",
     "PROOFOS_E2E_CALLER_ID_TOKEN: ${{ steps.google-auth.outputs.id_token }}",
     "VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}",
+    "verify_authenticated_e2e_promotion.py",
 )
-FORBIDDEN_SNIPPETS = (
+FORBIDDEN_GLOBAL = (
     "secrets.PROOFOS_E2E_CALLER_ID_TOKEN",
     "credentials_json:",
     "GOOGLE_APPLICATION_CREDENTIALS",
     "ref: ${{ inputs.expected_git_sha }}",
 )
+
+
+def _job_sections(text: str) -> tuple[str, str]:
+    authorize_marker = "  authorize:\n"
+    privileged_marker = "  privileged-e2e:\n"
+    a = text.find(authorize_marker)
+    p = text.find(privileged_marker)
+    if a < 0 or p < 0 or a >= p:
+        return "", ""
+    return text[a:p], text[p:]
 
 
 def validate() -> list[str]:
@@ -39,30 +54,62 @@ def validate() -> list[str]:
         return ["authenticated_e2e_workflow_missing"]
 
     text = WORKFLOW.read_text(encoding="utf-8")
-    for snippet in REQUIRED_SNIPPETS:
+    for snippet in GLOBAL_REQUIRED:
         if snippet not in text:
             issues.append("missing:" + snippet)
-    for snippet in FORBIDDEN_SNIPPETS:
+    for snippet in FORBIDDEN_GLOBAL:
         if snippet in text:
             issues.append("forbidden:" + snippet)
 
+    authorize, privileged = _job_sections(text)
+    if not authorize or not privileged:
+        issues.append("authorization_and_privileged_jobs_must_be_separate")
+        return issues
+
+    if "id-token: write" in authorize:
+        issues.append("authorization_job_must_not_have_oidc_permission")
+    if "${{ secrets." in authorize:
+        issues.append("authorization_job_must_not_reference_repository_secrets")
+    if "google-github-actions/auth@" in authorize:
+        issues.append("authorization_job_must_not_mint_google_identity")
+
+    required_authorize = (
+        "actions: read",
+        "Verify source evidence workflow identity",
+        "Download sealed health evidence",
+        "Download sealed trust evidence",
+        "Download sealed evidence manifest",
+        "Download sealed launch verdict",
+        "- name: Authorize privileged authenticated E2E",
+        "uv run python scripts/authorize_authenticated_e2e.py",
+        "authorized: ${{ steps.authorize.outputs.authorized }}",
+        "target_origin: ${{ steps.authorize.outputs.target_origin }}",
+        "source_git_sha: ${{ steps.authorize.outputs.source_git_sha }}",
+    )
+    for snippet in required_authorize:
+        if snippet not in authorize:
+            issues.append("authorization_job_missing:" + snippet)
+
+    for snippet in PRIVILEGED_REQUIRED:
+        if snippet not in privileged:
+            issues.append("privileged_job_missing:" + snippet)
+
+    if text.count("id-token: write") != 1:
+        issues.append("oidc_permission_must_exist_exactly_once")
     if text.count("uses: google-github-actions/auth@v3") != 1:
         issues.append("google_auth_action_must_appear_exactly_once")
 
-    checkout = text.find("uses: actions/checkout@v7")
-    gate = text.find("- name: Authorize privileged authenticated E2E")
-    auth = text.find("uses: google-github-actions/auth@v3")
-    collect = text.find("uv run python scripts/verify_authenticated_collection.py \\")
+    gate = authorize.find("- name: Authorize privileged authenticated E2E")
+    source = authorize.find("Verify source evidence workflow identity")
+    download = authorize.find("Download sealed health evidence")
+    if min(gate, source, download) < 0 or not (source < download < gate):
+        issues.append("source_identity_and_bundle_must_precede_authorization")
 
-    if checkout < 0 or gate < 0 or auth < 0 or collect < 0:
-        issues.append("required_workflow_stage_missing")
-    elif not (checkout < gate < auth < collect):
-        issues.append("launch_gate_must_precede_google_identity_and_collection")
-
-    source_check = text.find("Verify source evidence workflow identity")
-    download = text.find("Download sealed health evidence")
-    if source_check < 0 or download < 0 or gate < 0 or not (source_check < download < gate):
-        issues.append("source_workflow_and_artifacts_must_precede_launch_gate")
+    auth = privileged.find("uses: google-github-actions/auth@v3")
+    collect = privileged.find("- name: Collect fresh authenticated signed evidence")
+    promotion = privileged.find("- name: Cross-check authenticated evidence against sealed launch bundle")
+    if min(auth, collect, promotion) < 0 or not (auth < collect < promotion):
+        issues.append("oidc_then_collection_then_promotion_order_required")
 
     return issues
 
@@ -76,13 +123,12 @@ def main() -> int:
         return 1
 
     print("Authenticated E2E workflow contract OK")
-    print("- sealed launch verdict: required before credentials")
-    print("- source workflow identity: verified")
-    print("- source Git SHA: verified")
-    print("- GitHub OIDC permission: required")
-    print("- Google WIF ID token: minted only after READY authorization")
-    print("- stored caller token secret: forbidden")
-    print("- Vercel edge bypass: secret request header only")
+    print("- authorization job: no secrets, no OIDC permission")
+    print("- sealed source run and evidence bundle: verified before authorization")
+    print("- privileged job: created only after READY authorization")
+    print("- GitHub OIDC/WIF: short-lived identity only in privileged job")
+    print("- stored caller token and service-account JSON: forbidden")
+    print("- authenticated collection: cross-checked against sealed launch bundle")
     return 0
 
 
