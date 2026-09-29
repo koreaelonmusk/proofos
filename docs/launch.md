@@ -43,6 +43,31 @@ python -m unittest tests.test_collector_readiness tests.test_collector_service -
 The historical Cloud Run record is `artifacts/cloud-proof.json`; it is not a
 substitute for rerunning the launch checks against the current deployment.
 
+## Vercel live trust evidence
+
+Every successful Vercel deployment now triggers two independent HTTP evidence
+collectors.
+
+- `verify_vercel_live_smoke.py` proves the public health contract and runtime
+  provenance, including Git SHA binding.
+- `verify_vercel_live_trust.py` records the authority-plane surface:
+  `/readyz` and an unauthenticated `POST /v1/collect`.
+
+The trust evidence distinguishes three states instead of collapsing them:
+
+- `READY_AND_ANONYMOUS_DENIED`: readiness returned HTTP 200 with no issues,
+  and the application itself denied anonymous collection with HTTP 401.
+- `CONFIG_NOT_READY_AND_ANONYMOUS_DENIED`: readiness returned HTTP 503 with
+  stable issue codes, while anonymous collection was still denied before probe
+  or signing authority.
+- `BLOCKED_BY_DEPLOYMENT_PROTECTION`: the Vercel edge blocked both probes, so
+  application readiness and caller-auth behavior were not observed.
+
+A not-ready collector is not described as unhealthy. It is evidence that the
+runtime correctly refused live authority because its configuration gate did not
+pass. The workflow never records bearer tokens, WIF tokens, signing keys,
+observation target URLs, or Vercel automation bypass secrets.
+
 ## Explicit live model selection
 
 `PROOFOS_GEMINI_MODEL` selects the model used by all three live ADK roles.
