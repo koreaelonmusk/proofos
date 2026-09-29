@@ -46,7 +46,8 @@ jobs:
           python scripts/verify_vercel_live_smoke.py \
             --url "$DEPLOYMENT_URL" \
             --output "artifacts/live-smoke/vercel-${{ github.run_id }}.json" \
-            --record-protection-block
+            --record-protection-block \
+            --expected-git-sha "$GITHUB_SHA"
 
       - name: Upload live smoke evidence
         uses: actions/upload-artifact@v7
