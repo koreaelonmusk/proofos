@@ -47,7 +47,11 @@ jobs:
             --url "$DEPLOYMENT_URL" \
             --output "artifacts/live-smoke/vercel-${{ github.run_id }}.json" \
             --record-protection-block \
-            --expected-git-sha "$GITHUB_SHA"
+            --expected-git-sha "$GITHUB_SHA" \
+            --github-deployment-id "${{ github.event.deployment.id }}" \
+            --github-deployment-status-id "${{ github.event.deployment_status.id }}" \
+            --github-environment "${{ github.event.deployment.environment }}" \
+            --environment-url "$DEPLOYMENT_URL"
 
       - name: Verify persisted smoke evidence independently
         run: python scripts/verify_live_smoke_artifact.py "artifacts/live-smoke/vercel-${{ github.run_id }}.json"
@@ -60,7 +64,11 @@ jobs:
           python scripts/verify_vercel_live_trust.py \
             --url "$DEPLOYMENT_URL" \
             --output "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json" \
-            --expected-git-sha "$GITHUB_SHA"
+            --expected-git-sha "$GITHUB_SHA" \
+            --github-deployment-id "${{ github.event.deployment.id }}" \
+            --github-deployment-status-id "${{ github.event.deployment_status.id }}" \
+            --github-environment "${{ github.event.deployment.environment }}" \
+            --environment-url "$DEPLOYMENT_URL"
 
       - name: Verify persisted trust evidence independently
         run: python scripts/verify_live_trust_artifact.py "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json"

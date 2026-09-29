@@ -59,6 +59,11 @@ def verify_pair(
             "health and trust evidence bind to different workflow source SHAs"
         )
 
+    if health.get("deployment_event") != trust.get("deployment_event"):
+        raise EvidencePairError(
+            "health and trust evidence bind to different deployment events"
+        )
+
     source_sha = health["workflow_source_git_sha"]
     if source_sha is None:
         raise EvidencePairError("paired evidence requires a workflow source SHA")
@@ -71,6 +76,9 @@ def verify_pair(
         "trust_evidence_sha256": trust["evidence_sha256"],
         "target_origin": health["target_origin"],
         "workflow_source_git_sha": source_sha,
+        "github_deployment_id": health["deployment_event"]["github_deployment_id"],
+        "github_deployment_status_id": health["deployment_event"]["github_deployment_status_id"],
+        "deployment_environment": health["deployment_event"]["environment"],
     }
     pair_digest = hashlib.sha256(
         json.dumps(pair_material, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -95,7 +103,7 @@ def _signed(sample: dict[str, Any]) -> dict[str, Any]:
 def _health_sample(origin: str, sha: str) -> dict[str, Any]:
     return _signed(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": "vercel-live-smoke-observation",
             "observed_at": "2026-09-30T00:00:00+00:00",
             "observer": "github-actions-http",
@@ -105,6 +113,13 @@ def _health_sample(origin: str, sha: str) -> dict[str, Any]:
             "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
             "bypass_attempted": False,
             "workflow_source_git_sha": sha,
+            "deployment_event": {
+                "github_deployment_id": 123,
+                "github_deployment_status_id": 456,
+                "environment": "preview",
+                "environment_url": origin,
+                "source_git_sha": sha,
+            },
             "claim_boundary": [
                 "proves the deployment edge rejected the workflow request before application health was observed",
                 "does not prove the collector is healthy or unhealthy",
@@ -117,12 +132,19 @@ def _health_sample(origin: str, sha: str) -> dict[str, Any]:
 def _trust_sample(origin: str, sha: str) -> dict[str, Any]:
     return _signed(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": "vercel-live-trust-surface-observation",
             "observed_at": "2026-09-30T00:00:00+00:00",
             "observer": "github-actions-http",
             "target_origin": origin,
             "workflow_source_git_sha": sha,
+            "deployment_event": {
+                "github_deployment_id": 123,
+                "github_deployment_status_id": 456,
+                "environment": "preview",
+                "environment_url": origin,
+                "source_git_sha": sha,
+            },
             "bypass_attempted": False,
             "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
             "readiness": {
