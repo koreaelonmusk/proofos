@@ -48,6 +48,7 @@ class CallerAuthConfig:
         if (
             parts.scheme != "https"
             or not parts.hostname
+            or not parts.hostname.lower().endswith(".vercel.app")
             or parts.username is not None
             or parts.password is not None
             or parts.path not in {"", "/"}
