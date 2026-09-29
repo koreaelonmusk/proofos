@@ -178,4 +178,6 @@ jobs:
         run: uv run python scripts/verify_live_trust_artifact.py --self-test
       - name: Validate the live evidence pair verifier
         run: uv run python scripts/verify_live_evidence_pair.py --self-test
+      - name: Validate the live evidence manifest verifier
+        run: uv run python scripts/verify_live_evidence_manifest.py --self-test
 
