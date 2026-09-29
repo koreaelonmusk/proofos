@@ -23,7 +23,7 @@ import time
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
@@ -127,7 +127,7 @@ def _load_profiles(collector_id: str) -> ProfileRegistry:
     return default_profiles(target, collector_id, timeout, requires_auth)
 
 
-def _identity_token_for(target: str) -> str:
+def _identity_token_for(target: str, vercel_oidc_token: str = "") -> str:
     """A Google-signed ID token for the target, from this service's identity.
 
     The collector authenticates as itself. It never receives, stores, or reuses
@@ -148,7 +148,11 @@ def _identity_token_for(target: str) -> str:
     # short-lived OIDC token through Google Workload Identity Federation
     # instead of accepting a long-lived service-account key file.
     if os.environ.get("VERCEL"):
-        return fetch_vercel_wif_id_token(audience, env=os.environ)
+        return fetch_vercel_wif_id_token(
+            audience,
+            env=os.environ,
+            subject_token=vercel_oidc_token,
+        )
 
     return google.oauth2.id_token.fetch_id_token(
         google.auth.transport.requests.Request(), audience
@@ -207,7 +211,7 @@ def readyz() -> JSONResponse:
 
 
 @app.post("/v1/collect")
-async def collect(request: CollectRequest) -> dict[str, Any]:
+async def collect(request: CollectRequest, http_request: Request) -> dict[str, Any]:
     """Perform an approved observation and return a signed attestation."""
     if CLOUD_RUNTIME and READINESS_ISSUES:
         raise HTTPException(
@@ -225,7 +229,16 @@ async def collect(request: CollectRequest) -> dict[str, Any]:
     token = None
     if profile.requires_auth:
         try:
-            token = await run_in_threadpool(_identity_token_for, profile.target)
+            vercel_oidc_token = (
+                http_request.headers.get("x-vercel-oidc-token", "")
+                if os.environ.get("VERCEL")
+                else ""
+            )
+            token = await run_in_threadpool(
+                _identity_token_for,
+                profile.target,
+                vercel_oidc_token,
+            )
         except Exception as exc:  # noqa: BLE001 - surfaced, never downgraded
             raise HTTPException(
                 status_code=503,
