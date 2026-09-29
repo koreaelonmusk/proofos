@@ -94,9 +94,22 @@ cannot supply or override the federation subject token through the request body.
 The external principal needs only `iam.serviceAccounts.getOpenIdToken` on the
 selected service account. Prefer Google's narrow
 `roles/iam.serviceAccountOpenIdTokenCreator` role when this is the only token
-operation required. Bind the smallest principal set possible
-and restrict the Google provider to the intended Vercel team, project, and
-deployment environment.
+operation required.
+
+The Google workload identity provider must also validate the Vercel token's
+issuer/audience and restrict who may federate. Do not create a provider that
+accepts every token from the team. Bind the provider to the intended Vercel
+issuer and allowed audience, map the project/environment claims, and use an
+attribute condition that admits only the ProofOS project and intended deployment
+environment. Google's STS remains the authority that validates the signed Vercel
+JWT; ProofOS does not parse an unverified JWT and make authorization decisions
+from its claims.
+
+This matters because the platform `VERCEL_OIDC_TOKEN` carries Vercel's normal
+project identity audience. If the Google provider expects a different audience,
+the exchange must fail closed. Configure Google's allowed audience to the
+audience issued for this Vercel project/team rather than weakening validation or
+introducing a static Google credential.
 
 On Vercel, `GOOGLE_APPLICATION_CREDENTIALS` is rejected by the collector
 boundary. A long-lived service-account key would recreate the secret-management
