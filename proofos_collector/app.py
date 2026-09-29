@@ -23,11 +23,16 @@ import time
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
+from proofos_collector.caller_auth import (
+    CallerAuthenticationError,
+    CallerAuthConfigurationError,
+    verify_google_caller,
+)
 from proofos_collector.readiness import configuration_issues
 from proofos_collector.vercel_wif import fetch_id_token as fetch_vercel_wif_id_token
 
@@ -211,8 +216,25 @@ def readyz() -> JSONResponse:
 
 
 @app.post("/v1/collect")
-async def collect(request: CollectRequest) -> dict[str, Any]:
+async def collect(request: CollectRequest, http_request: Request) -> dict[str, Any]:
     """Perform an approved observation and return a signed attestation."""
+    if os.environ.get("VERCEL"):
+        try:
+            verify_google_caller(
+                http_request.headers.get("authorization", ""),
+                env=os.environ,
+            )
+        except CallerAuthConfigurationError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="collector caller authentication is not configured",
+            ) from exc
+        except CallerAuthenticationError as exc:
+            raise HTTPException(
+                status_code=401,
+                detail="collector caller authentication failed",
+            ) from exc
+
     if CLOUD_RUNTIME and READINESS_ISSUES:
         raise HTTPException(
             status_code=503, detail="collector is not configured for live collection"
