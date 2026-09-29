@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import re
 from urllib.parse import urlsplit
 
 from google.auth import identity_pool
@@ -25,6 +26,15 @@ TOKEN_URL = "https://sts.googleapis.com/v1/token"
 IAM_CREDENTIALS_BASE = "https://iamcredentials.googleapis.com/v1"
 CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 REQUEST_TIMEOUT_SECONDS = 10.0
+
+WIF_PROVIDER_RE = re.compile(
+    r"^//iam\.googleapis\.com/projects/[1-9][0-9]*/locations/global/"
+    r"workloadIdentityPools/[A-Za-z0-9._-]+/providers/[A-Za-z0-9._-]+$"
+)
+SERVICE_ACCOUNT_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*@"
+    r"[A-Za-z0-9][A-Za-z0-9.-]*\.iam\.gserviceaccount\.com$"
+)
 
 
 class WifConfigurationError(RuntimeError):
@@ -47,18 +57,10 @@ class VercelWifConfig:
 
         if not provider:
             raise WifConfigurationError(f"{WIF_PROVIDER_ENV} is required")
-        if not provider.startswith("//iam.googleapis.com/projects/"):
-            raise WifConfigurationError(f"{WIF_PROVIDER_ENV} is not a Google WIF provider")
-        if "/locations/global/workloadIdentityPools/" not in provider or "/providers/" not in provider:
+        if WIF_PROVIDER_RE.fullmatch(provider) is None:
             raise WifConfigurationError(f"{WIF_PROVIDER_ENV} is not a Google WIF provider")
 
-        if (
-            not service_account
-            or "@" not in service_account
-            or "/" in service_account
-            or "?" in service_account
-            or "#" in service_account
-        ):
+        if SERVICE_ACCOUNT_RE.fullmatch(service_account) is None:
             raise WifConfigurationError(f"{SERVICE_ACCOUNT_ENV} is invalid")
 
         return cls(
