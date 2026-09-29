@@ -261,6 +261,8 @@ def observe(
         and anonymous_collect["outcome"] == "BLOCKED_BY_DEPLOYMENT_PROTECTION"
     ):
         outcome = "BLOCKED_BY_DEPLOYMENT_PROTECTION"
+    elif readiness["outcome"] == "BLOCKED_BY_DEPLOYMENT_PROTECTION":
+        outcome = "READINESS_BLOCKED_AND_ANONYMOUS_DENIED"
     elif readiness["outcome"] == "READY":
         outcome = "READY_AND_ANONYMOUS_DENIED"
     else:
