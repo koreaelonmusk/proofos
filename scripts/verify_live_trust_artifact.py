@@ -15,7 +15,7 @@ import sys
 from typing import Any
 from urllib.parse import urlsplit
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KIND = "vercel-live-trust-surface-observation"
 TOP_LEVEL_KEYS = {
     "schema_version",
@@ -24,6 +24,7 @@ TOP_LEVEL_KEYS = {
     "observer",
     "target_origin",
     "workflow_source_git_sha",
+    "deployment_event",
     "bypass_attempted",
     "outcome",
     "readiness",
@@ -73,6 +74,48 @@ def _git_sha(value: Any) -> str:
             "workflow_source_git_sha must be a full 40-character git SHA"
         )
     return value
+
+
+def _positive_int(value: Any, *, field: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise TrustArtifactVerificationError(f"{field} must be a positive integer")
+    return value
+
+
+def _environment(value: Any) -> str:
+    if not isinstance(value, str):
+        raise TrustArtifactVerificationError("deployment environment must be a string")
+    value = value.strip().lower()
+    if value not in {"production", "preview", "development"}:
+        raise TrustArtifactVerificationError("deployment environment is unsupported")
+    return value
+
+
+def _deployment_event(evidence: dict[str, Any]) -> dict[str, Any]:
+    event = evidence.get("deployment_event")
+    if not isinstance(event, dict):
+        raise TrustArtifactVerificationError("deployment_event is missing")
+    expected_keys = {
+        "github_deployment_id",
+        "github_deployment_status_id",
+        "environment",
+        "environment_url",
+        "source_git_sha",
+    }
+    if set(event) != expected_keys:
+        raise TrustArtifactVerificationError("deployment_event fields do not match schema")
+    return {
+        "github_deployment_id": _positive_int(
+            event["github_deployment_id"], field="deployment_event.github_deployment_id"
+        ),
+        "github_deployment_status_id": _positive_int(
+            event["github_deployment_status_id"],
+            field="deployment_event.github_deployment_status_id",
+        ),
+        "environment": _environment(event["environment"]),
+        "environment_url": _origin(event["environment_url"]),
+        "source_git_sha": _git_sha(event["source_git_sha"]),
+    }
 
 
 def _hash_without_digest(evidence: dict[str, Any]) -> str:
@@ -170,6 +213,15 @@ def verify_evidence(evidence: Any) -> dict[str, Any]:
 
     origin = _origin(evidence.get("target_origin"))
     workflow_sha = _git_sha(evidence.get("workflow_source_git_sha"))
+    deployment_event = _deployment_event(evidence)
+    if deployment_event["environment_url"] != origin:
+        raise TrustArtifactVerificationError(
+            "target origin does not match deployment event environment URL"
+        )
+    if deployment_event["source_git_sha"] != workflow_sha:
+        raise TrustArtifactVerificationError(
+            "workflow source SHA does not match deployment event source SHA"
+        )
 
     boundary = evidence.get("claim_boundary")
     if not isinstance(boundary, list) or not boundary or not all(
@@ -214,6 +266,7 @@ def verify_evidence(evidence: Any) -> dict[str, Any]:
         "outcome": outcome,
         "target_origin": origin,
         "workflow_source_git_sha": workflow_sha,
+        "deployment_event": deployment_event,
         "evidence_sha256": digest.lower(),
     }
 
@@ -228,12 +281,19 @@ def _signed(sample: dict[str, Any]) -> dict[str, Any]:
 def _sample(outcome: str, readiness: dict[str, Any], anonymous: dict[str, Any]) -> dict[str, Any]:
     return _signed(
         {
-            "schema_version": 1,
+            "schema_version": SCHEMA_VERSION,
             "kind": KIND,
             "observed_at": "2026-09-30T00:00:00+00:00",
             "observer": "github-actions-http",
             "target_origin": "https://proofos-preview.vercel.app",
             "workflow_source_git_sha": "0123456789abcdef0123456789abcdef01234567",
+            "deployment_event": {
+                "github_deployment_id": 123,
+                "github_deployment_status_id": 456,
+                "environment": "preview",
+                "environment_url": "https://proofos-preview.vercel.app",
+                "source_git_sha": "0123456789abcdef0123456789abcdef01234567",
+            },
             "bypass_attempted": True,
             "outcome": outcome,
             "readiness": readiness,
