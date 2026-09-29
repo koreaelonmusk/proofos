@@ -71,6 +71,9 @@ The Vercel collector verifies that token before any probe or signing work runs.
 These are identity policy values, not secrets. The bearer token itself arrives
 on the request and is verified against Google's signing keys, the configured
 audience, the expected service-account email, and `email_verified=true`.
+The configured inbound audience must be an exact `https://*.vercel.app` origin;
+arbitrary HTTPS audiences are refused. If a future collector uses a custom
+domain, add that trust surface explicitly with its own validation and tests.
 Missing/invalid identity returns 401 before the collector probes the target or
 uses its signing key. A missing caller-auth policy keeps the Vercel collector
 not-ready with `vercel_caller_auth_not_configured`.
