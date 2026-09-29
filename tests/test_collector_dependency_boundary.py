@@ -10,6 +10,14 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 COLLECTOR = ROOT / "proofos_collector"
 
+REQUIRED_DISTRIBUTIONS = {
+    "fastapi",
+    "uvicorn",
+    "cryptography",
+    "google-auth",
+    "requests",
+}
+
 FORBIDDEN_DISTRIBUTIONS = {
     "google-adk",
     "google-genai",
@@ -46,6 +54,11 @@ class CollectorDependencyBoundaryTests(unittest.TestCase):
             data["tool"]["vercel"]["entrypoint"],
             "proofos_collector.app:app",
         )
+        self.assertEqual(
+            data["project"]["requires-python"],
+            ">=3.12",
+            "Vercel Python runtime contract drifted from the supported 3.12+ baseline",
+        )
 
     def test_vercel_runtime_has_no_agent_or_journal_dependencies(self):
         data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -59,6 +72,12 @@ class CollectorDependencyBoundaryTests(unittest.TestCase):
             .lower()
             for item in dependencies
         }
+        missing = REQUIRED_DISTRIBUTIONS - names
+        self.assertEqual(
+            missing,
+            set(),
+            f"Vercel collector lost required runtime dependencies: {sorted(missing)}",
+        )
         overlap = names & FORBIDDEN_DISTRIBUTIONS
         self.assertEqual(
             overlap,
