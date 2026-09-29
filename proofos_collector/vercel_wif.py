@@ -85,6 +85,7 @@ def _validated_target_audience(target_audience: str) -> str:
     if (
         parts.scheme != "https"
         or not parts.hostname
+        or not parts.hostname.lower().endswith(".run.app")
         or parts.username is not None
         or parts.password is not None
         or parts.path not in {"", "/"}
