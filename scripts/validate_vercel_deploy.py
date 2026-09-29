@@ -12,6 +12,7 @@ import sys
 import tomllib
 
 from fastapi import FastAPI
+from proofos_collector.runtime_provenance import public_runtime_provenance
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -99,6 +100,28 @@ def validate() -> list[str]:
     if conflicting.exists():
         issues.append("unexpected_vercel_json_present")
 
+    sample_env = {
+        "VERCEL": "1",
+        "VERCEL_ENV": "preview",
+        "VERCEL_DEPLOYMENT_ID": "dpl_contract_test",
+        "VERCEL_REGION": "icn1",
+        "VERCEL_URL": "proofos-contract-test.vercel.app",
+        "GEMINI_API_KEY": "must-not-leak",
+        "VERCEL_OIDC_TOKEN": "must-not-leak",
+    }
+    provenance = public_runtime_provenance(sample_env)
+    expected_provenance = {
+        "platform": "vercel",
+        "environment": "preview",
+        "deployment_id": "dpl_contract_test",
+        "region": "icn1",
+        "url": "https://proofos-contract-test.vercel.app",
+    }
+    if provenance != expected_provenance:
+        issues.append("runtime_provenance_contract_drift")
+    if "must-not-leak" in repr(provenance):
+        issues.append("runtime_provenance_secret_leak")
+
     return issues
 
 
@@ -116,6 +139,7 @@ def main() -> int:
     print("- collector dependency boundary: OK")
     print("- required FastAPI routes: OK")
     print("- conflicting vercel.json: absent")
+    print("- public runtime provenance allowlist: OK")
     return 0
 
 
