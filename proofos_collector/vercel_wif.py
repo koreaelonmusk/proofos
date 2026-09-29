@@ -85,6 +85,7 @@ def _validated_target_audience(target_audience: str) -> str:
         or not parts.hostname
         or parts.username is not None
         or parts.password is not None
+        or parts.path not in {"", "/"}
         or parts.query
         or parts.fragment
     ):
