@@ -76,7 +76,7 @@ class VercelWifConfig:
         )
 
 
-class VercelOidcSupplier:
+class VercelOidcSupplier(identity_pool.SubjectTokenSupplier):
     """google-auth subject-token supplier backed by Vercel's short-lived token."""
 
     def __init__(self, token: str) -> None:
