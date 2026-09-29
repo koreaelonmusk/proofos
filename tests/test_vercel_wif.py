@@ -47,7 +47,6 @@ class CollectorEnvironmentContractTests(unittest.TestCase):
             document["foreign_service_configuration"],
         )
         self.assertIn("PROOFOS_GCP_WIF_PROVIDER", document["vercel_wif_configuration"])
-        self.assertIn("x-vercel-oidc-token", document["vercel_runtime_request_headers"])
         self.assertIn("VERCEL_OIDC_TOKEN", document["platform_managed_environment"])
 
     def test_collector_rejects_foreign_capabilities_without_echoing_values(self):
@@ -182,16 +181,17 @@ class VercelWorkloadIdentityTests(unittest.TestCase):
 
         import proofos_collector.app as app_module
 
-        with patch.dict(os.environ, {"VERCEL": "1"}, clear=False), patch.object(
+        with patch.dict(
+            os.environ,
+            {"VERCEL": "1", "VERCEL_OIDC_TOKEN": OIDC_TOKEN},
+            clear=False,
+        ), patch.object(
             app_module,
             "fetch_vercel_wif_id_token",
             return_value="google-signed-id-token",
         ) as fetch:
             self.assertEqual(
-                app_module._identity_token_for(
-                    f"{TARGET}/health",
-                    OIDC_TOKEN,
-                ),
+                app_module._identity_token_for(f"{TARGET}/health"),
                 "google-signed-id-token",
             )
             fetch.assert_called_once_with(
