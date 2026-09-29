@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from proofos_collector.readiness import configuration_issues
+from proofos_collector.vercel_wif import fetch_id_token as fetch_vercel_wif_id_token
 
 from proofos.attestation import AttestationSigner, Outcome
 from proofos.keys import FileSigningKeyProvider, write_public_key
@@ -142,6 +143,13 @@ def _identity_token_for(target: str) -> str:
 
     parts = urlsplit(target)
     audience = f"{parts.scheme}://{parts.netloc}"
+
+    # Vercel has no Google metadata server. Exchange its platform-issued,
+    # short-lived OIDC token through Google Workload Identity Federation
+    # instead of accepting a long-lived service-account key file.
+    if os.environ.get("VERCEL"):
+        return fetch_vercel_wif_id_token(audience, env=os.environ)
+
     return google.oauth2.id_token.fetch_id_token(
         google.auth.transport.requests.Request(), audience
     )
