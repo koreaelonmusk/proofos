@@ -25,6 +25,7 @@ ALLOWED_RUNTIME_KEYS = {
     "environment",
     "deployment_id",
     "region",
+    "git_sha",
     "url",
 }
 EXPECTED_TOP_LEVEL_KEYS = {"status", "service", "runtime"}
@@ -52,7 +53,14 @@ def _validated_vercel_origin(raw: str) -> str:
     return f"https://{parts.hostname.lower()}"
 
 
-def _validated_health(payload: Any) -> dict[str, Any]:
+def _validated_git_sha(value: str, *, label: str) -> str:
+    value = value.strip().lower()
+    if len(value) != 40 or any(ch not in "0123456789abcdef" for ch in value):
+        raise SmokeFailure(f"{label} is not a full 40-character git SHA")
+    return value
+
+
+def _validated_health(payload: Any, *, expected_git_sha: str = "") -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise SmokeFailure("health response must be a JSON object")
 
@@ -84,6 +92,15 @@ def _validated_health(payload: Any) -> dict[str, Any]:
     if environment not in {"production", "preview", "development"}:
         raise SmokeFailure("Vercel environment is missing or invalid")
 
+    runtime_git_sha = runtime.get("git_sha")
+    if not isinstance(runtime_git_sha, str):
+        raise SmokeFailure("runtime git SHA is missing")
+    runtime_git_sha = _validated_git_sha(runtime_git_sha, label="runtime git SHA")
+    if expected_git_sha:
+        expected_git_sha = _validated_git_sha(expected_git_sha, label="expected git SHA")
+        if runtime_git_sha != expected_git_sha:
+            raise SmokeFailure("runtime git SHA does not match deployment workflow SHA")
+
     runtime_url = runtime.get("url")
     if runtime_url is not None:
         _validated_vercel_origin(runtime_url)
@@ -106,6 +123,7 @@ def observe(
     timeout: float = 10.0,
     bypass_secret: str = "",
     record_protection_block: bool = False,
+    expected_git_sha: str = "",
 ) -> dict[str, Any]:
     origin = _validated_vercel_origin(origin)
     health_url = f"{origin}/healthz"
@@ -134,6 +152,11 @@ def observe(
                     "http_status": exc.code,
                     "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
                     "bypass_attempted": bool(bypass_secret),
+                    "workflow_source_git_sha": (
+                        _validated_git_sha(expected_git_sha, label="expected git SHA")
+                        if expected_git_sha
+                        else None
+                    ),
                     "claim_boundary": [
                         "proves the deployment edge rejected the workflow request before application health was observed",
                         "does not prove the collector is healthy or unhealthy",
@@ -153,7 +176,7 @@ def observe(
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SmokeFailure("health endpoint did not return valid UTF-8 JSON") from exc
 
-    validated = _validated_health(payload)
+    validated = _validated_health(payload, expected_git_sha=expected_git_sha)
     return _hash_evidence(
         {
             "schema_version": 1,
@@ -165,6 +188,11 @@ def observe(
             "http_status": 200,
             "outcome": "OBSERVED_HEALTH",
             "bypass_attempted": bool(bypass_secret),
+            "workflow_source_git_sha": (
+                _validated_git_sha(expected_git_sha, label="expected git SHA")
+                if expected_git_sha
+                else None
+            ),
             "observation": validated,
             "claim_boundary": [
                 "proves the HTTPS health endpoint answered the expected public contract",
@@ -184,10 +212,14 @@ def _self_test() -> None:
             "environment": "preview",
             "deployment_id": "dpl_contract_test",
             "region": "icn1",
+            "git_sha": "0123456789abcdef0123456789abcdef01234567",
             "url": "https://proofos-preview.vercel.app",
         },
     }
-    validated = _validated_health(good)
+    validated = _validated_health(
+        good,
+        expected_git_sha="0123456789abcdef0123456789abcdef01234567",
+    )
     assert validated["runtime"]["deployment_id"] == "dpl_contract_test"
 
     leaked = {
@@ -223,6 +255,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--record-protection-block", action="store_true")
+    parser.add_argument("--expected-git-sha", default="")
     args = parser.parse_args()
 
     if args.self_test:
@@ -238,6 +271,7 @@ def main() -> int:
             timeout=args.timeout,
             bypass_secret=os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", ""),
             record_protection_block=args.record_protection_block,
+            expected_git_sha=args.expected_git_sha,
         )
     except SmokeFailure as exc:
         print(f"live smoke FAILED: {exc}", file=sys.stderr)
