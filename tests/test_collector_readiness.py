@@ -47,7 +47,7 @@ class ConfigurationReadinessTests(unittest.TestCase):
             module, 'READINESS_ISSUES', ('signing_key_not_configured',)
         ), patch.object(module, 'probe_health') as probe:
             with self.assertRaises(HTTPException) as caught:
-                asyncio.run(module.collect(request, None))
+                asyncio.run(module.collect(request))
             self.assertEqual(caught.exception.status_code, 503)
             probe.assert_not_called()
             self.assertEqual(module.healthz()['status'], 'ok')
