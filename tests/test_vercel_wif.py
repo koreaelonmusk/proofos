@@ -14,7 +14,6 @@ from proofos_collector.env_contract import (
 from proofos_collector.readiness import configuration_issues
 from proofos_collector.vercel_wif import (
     CLOUD_PLATFORM_SCOPE,
-    OIDC_TOKEN_ENV,
     SERVICE_ACCOUNT_ENV,
     SUBJECT_TOKEN_TYPE,
     TOKEN_URL,
@@ -79,7 +78,6 @@ class CollectorEnvironmentContractTests(unittest.TestCase):
             **base,
             WIF_PROVIDER_ENV: PROVIDER,
             SERVICE_ACCOUNT_ENV: SERVICE_ACCOUNT,
-            OIDC_TOKEN_ENV: OIDC_TOKEN,
         }
         self.assertNotIn("vercel_wif_not_configured", configuration_issues(ready))
 
@@ -120,7 +118,12 @@ class VercelWorkloadIdentityTests(unittest.TestCase):
         ) as factory:
             credentials = object()
             factory.return_value = credentials
-            token = fetch_id_token(TARGET, env=env, session_factory=Session)
+            token = fetch_id_token(
+                TARGET,
+                env=env,
+                subject_token=OIDC_TOKEN,
+                session_factory=Session,
+            )
 
         self.assertEqual(token, "google-signed-id-token")
         self.assertIs(observed["credentials"], credentials)
@@ -149,10 +152,17 @@ class VercelWorkloadIdentityTests(unittest.TestCase):
             return_value="google-signed-id-token",
         ) as fetch:
             self.assertEqual(
-                app_module._identity_token_for(f"{TARGET}/health"),
+                app_module._identity_token_for(
+                    f"{TARGET}/health",
+                    OIDC_TOKEN,
+                ),
                 "google-signed-id-token",
             )
-            fetch.assert_called_once_with(TARGET, env=os.environ)
+            fetch.assert_called_once_with(
+                TARGET,
+                env=os.environ,
+                subject_token=OIDC_TOKEN,
+            )
 
     def test_exchange_errors_never_echo_the_subject_token(self):
         class BrokenSession:
@@ -169,7 +179,12 @@ class VercelWorkloadIdentityTests(unittest.TestCase):
             OIDC_TOKEN_ENV: OIDC_TOKEN,
         }
         with self.assertRaises(WifExchangeError) as caught:
-            fetch_id_token(TARGET, env=env, session_factory=BrokenSession)
+            fetch_id_token(
+                TARGET,
+                env=env,
+                subject_token=OIDC_TOKEN,
+                session_factory=BrokenSession,
+            )
 
         self.assertNotIn(OIDC_TOKEN, str(caught.exception))
         self.assertIn("RuntimeError", str(caught.exception))
