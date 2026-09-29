@@ -190,4 +190,6 @@ jobs:
         run: uv run python scripts/verify_authenticated_collection_artifact.py --self-test
       - name: Validate authenticated E2E identity workflow
         run: uv run python scripts/validate_authenticated_e2e_workflow.py
+      - name: Validate authenticated E2E promotion gate
+        run: uv run python scripts/verify_authenticated_e2e_promotion.py --self-test
 
