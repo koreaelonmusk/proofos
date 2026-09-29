@@ -125,6 +125,7 @@ class VercelWorkloadIdentityTests(unittest.TestCase):
             TARGET + "?debug=1",
             TARGET + "#fragment",
             "http://proofos-api.example.com",
+            "https://api.example.com",
             "https://user:pass@proofos-api.example.com",
         ):
             with self.subTest(invalid=invalid):
