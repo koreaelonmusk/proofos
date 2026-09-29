@@ -13,6 +13,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+import os
 import sys
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -94,21 +95,52 @@ def _validated_health(payload: Any) -> dict[str, Any]:
     }
 
 
-def observe(origin: str, *, timeout: float = 10.0) -> dict[str, Any]:
+def _hash_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    canonical = json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {**evidence, "evidence_sha256": hashlib.sha256(canonical).hexdigest()}
+
+
+def observe(
+    origin: str,
+    *,
+    timeout: float = 10.0,
+    bypass_secret: str = "",
+    record_protection_block: bool = False,
+) -> dict[str, Any]:
     origin = _validated_vercel_origin(origin)
     health_url = f"{origin}/healthz"
-    request = Request(
-        health_url,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "proofos-live-smoke/1",
-        },
-    )
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "proofos-live-smoke/1",
+    }
+    if bypass_secret:
+        headers["x-vercel-protection-bypass"] = bypass_secret
+
+    request = Request(health_url, headers=headers)
     try:
         with urlopen(request, timeout=timeout) as response:
             status = response.status
             raw = response.read(64 * 1024)
     except HTTPError as exc:
+        if exc.code in {401, 403} and record_protection_block:
+            return _hash_evidence(
+                {
+                    "schema_version": 1,
+                    "kind": "vercel-live-smoke-observation",
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                    "observer": "github-actions-http",
+                    "target_origin": origin,
+                    "health_url": health_url,
+                    "http_status": exc.code,
+                    "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
+                    "bypass_attempted": bool(bypass_secret),
+                    "claim_boundary": [
+                        "proves the deployment edge rejected the workflow request before application health was observed",
+                        "does not prove the collector is healthy or unhealthy",
+                        "does not expose or record the automation bypass secret",
+                    ],
+                }
+            )
         raise SmokeFailure(f"health endpoint returned HTTP {exc.code}") from exc
     except URLError as exc:
         raise SmokeFailure(f"health endpoint was unreachable: {type(exc.reason).__name__}") from exc
@@ -122,24 +154,25 @@ def observe(origin: str, *, timeout: float = 10.0) -> dict[str, Any]:
         raise SmokeFailure("health endpoint did not return valid UTF-8 JSON") from exc
 
     validated = _validated_health(payload)
-    evidence: dict[str, Any] = {
-        "schema_version": 1,
-        "kind": "vercel-live-smoke-observation",
-        "observed_at": datetime.now(timezone.utc).isoformat(),
-        "observer": "github-actions-http",
-        "target_origin": origin,
-        "health_url": health_url,
-        "http_status": 200,
-        "observation": validated,
-        "claim_boundary": [
-            "proves the HTTPS health endpoint answered the expected public contract",
-            "records only allowlisted runtime provenance exposed by the collector",
-            "does not prove IAM policy, readiness, signing-key durability, or an end-to-end VERIFIED execution",
-        ],
-    }
-    canonical = json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    evidence["evidence_sha256"] = hashlib.sha256(canonical).hexdigest()
-    return evidence
+    return _hash_evidence(
+        {
+            "schema_version": 1,
+            "kind": "vercel-live-smoke-observation",
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "observer": "github-actions-http",
+            "target_origin": origin,
+            "health_url": health_url,
+            "http_status": 200,
+            "outcome": "OBSERVED_HEALTH",
+            "bypass_attempted": bool(bypass_secret),
+            "observation": validated,
+            "claim_boundary": [
+                "proves the HTTPS health endpoint answered the expected public contract",
+                "records only allowlisted runtime provenance exposed by the collector",
+                "does not prove IAM policy, readiness, signing-key durability, or an end-to-end VERIFIED execution",
+            ],
+        }
+    )
 
 
 def _self_test() -> None:
@@ -189,6 +222,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--record-protection-block", action="store_true")
     args = parser.parse_args()
 
     if args.self_test:
@@ -199,14 +233,22 @@ def main() -> int:
         parser.error("--url and --output are required unless --self-test is used")
 
     try:
-        evidence = observe(args.url, timeout=args.timeout)
+        evidence = observe(
+            args.url,
+            timeout=args.timeout,
+            bypass_secret=os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", ""),
+            record_protection_block=args.record_protection_block,
+        )
     except SmokeFailure as exc:
         print(f"live smoke FAILED: {exc}", file=sys.stderr)
         return 1
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(f"live smoke OK: {evidence['observation']['runtime']['deployment_id']}")
+    if evidence["outcome"] == "OBSERVED_HEALTH":
+        print(f"live smoke OK: {evidence['observation']['runtime']['deployment_id']}")
+    else:
+        print(f"live smoke recorded: {evidence['outcome']} (HTTP {evidence['http_status']})")
     print(f"evidence: {args.output}")
     return 0
 
