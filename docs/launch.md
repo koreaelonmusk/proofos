@@ -52,3 +52,8 @@ This setting does not enable Gemini mode, grant credentials, or provide an
 automatic fallback. A provider outage still ends in ABSTAIN. Before switching
 production, validate the chosen model's availability and tool-calling behavior
 against the complete authenticated execution path.
+
+Temporary Gemini server failures (HTTP 500, 502, 503, or 504) are retried twice
+with bounded 5 and 10 second delays. Other client and authentication failures
+are not retried. Exhaustion still ends in ABSTAIN; it never changes the verdict
+or switches to an unconfigured model.
