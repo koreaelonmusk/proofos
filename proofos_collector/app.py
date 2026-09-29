@@ -34,6 +34,7 @@ from proofos_collector.caller_auth import (
     verify_google_caller,
 )
 from proofos_collector.readiness import configuration_issues
+from proofos_collector.runtime_provenance import public_runtime_provenance
 from proofos_collector.vercel_wif import fetch_id_token as fetch_vercel_wif_id_token
 
 from proofos.attestation import AttestationSigner, Outcome
@@ -190,7 +191,11 @@ def evidence_console() -> RedirectResponse:
 
 @app.get("/healthz")
 def healthz() -> dict[str, Any]:
-    return {"status": "ok", "service": SERVICE_NAME}
+    return {
+        "status": "ok",
+        "service": SERVICE_NAME,
+        "runtime": public_runtime_provenance(os.environ),
+    }
 
 
 @app.get("/v1/profiles")
