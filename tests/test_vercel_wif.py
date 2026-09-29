@@ -46,7 +46,9 @@ class CollectorEnvironmentContractTests(unittest.TestCase):
             "PROOFOS_AGENT_RUNTIME",
             document["foreign_service_configuration"],
         )
-        self.assertIn("VERCEL_OIDC_TOKEN", document["vercel_wif_conditional"])
+        self.assertIn("PROOFOS_GCP_WIF_PROVIDER", document["vercel_wif_configuration"])
+        self.assertIn("x-vercel-oidc-token", document["vercel_runtime_request_headers"])
+        self.assertIn("VERCEL_OIDC_TOKEN", document["platform_managed_environment"])
 
     def test_collector_rejects_foreign_capabilities_without_echoing_values(self):
         secret = "do-not-echo-this"
@@ -64,6 +66,13 @@ class CollectorEnvironmentContractTests(unittest.TestCase):
             ),
         )
         self.assertNotIn(secret, repr(issues))
+
+    def test_vercel_rejects_static_google_credentials(self):
+        issues = collector_boundary_issues({
+            "VERCEL": "1",
+            "GOOGLE_APPLICATION_CREDENTIALS": "/tmp/service-account.json",
+        })
+        self.assertIn("static_google_credentials_forbidden_on_vercel", issues)
 
     def test_vercel_private_target_requires_short_lived_wif(self):
         base = {
@@ -83,6 +92,34 @@ class CollectorEnvironmentContractTests(unittest.TestCase):
 
 
 class VercelWorkloadIdentityTests(unittest.TestCase):
+    def test_invalid_provider_and_service_account_fail_before_network(self):
+        from proofos_collector.vercel_wif import VercelWifConfig, WifConfigurationError
+
+        with self.assertRaises(WifConfigurationError):
+            VercelWifConfig.from_env({
+                WIF_PROVIDER_ENV: "https://example.com/not-a-provider",
+                SERVICE_ACCOUNT_ENV: SERVICE_ACCOUNT,
+            })
+        with self.assertRaises(WifConfigurationError):
+            VercelWifConfig.from_env({
+                WIF_PROVIDER_ENV: PROVIDER,
+                SERVICE_ACCOUNT_ENV: "not-an-email",
+            })
+
+    def test_missing_runtime_oidc_token_fails_before_network(self):
+        from proofos_collector.vercel_wif import WifConfigurationError
+
+        with self.assertRaises(WifConfigurationError):
+            fetch_id_token(
+                TARGET,
+                env={
+                    WIF_PROVIDER_ENV: PROVIDER,
+                    SERVICE_ACCOUNT_ENV: SERVICE_ACCOUNT,
+                },
+                subject_token="",
+                session_factory=lambda _credentials: self.fail("network session created"),
+            )
+
     def test_subject_supplier_returns_only_the_platform_token(self):
         supplier = VercelOidcSupplier(OIDC_TOKEN)
         self.assertEqual(supplier.get_subject_token(object()), OIDC_TOKEN)
