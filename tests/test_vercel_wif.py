@@ -110,7 +110,6 @@ class VercelWorkloadIdentityTests(unittest.TestCase):
         env = {
             WIF_PROVIDER_ENV: PROVIDER,
             SERVICE_ACCOUNT_ENV: SERVICE_ACCOUNT,
-            OIDC_TOKEN_ENV: OIDC_TOKEN,
         }
 
         with patch(
@@ -176,7 +175,6 @@ class VercelWorkloadIdentityTests(unittest.TestCase):
         env = {
             WIF_PROVIDER_ENV: PROVIDER,
             SERVICE_ACCOUNT_ENV: SERVICE_ACCOUNT,
-            OIDC_TOKEN_ENV: OIDC_TOKEN,
         }
         with self.assertRaises(WifExchangeError) as caught:
             fetch_id_token(
