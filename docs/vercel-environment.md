@@ -57,6 +57,24 @@ A non-empty value from either forbidden class is a readiness failure. The
 readiness response contains only stable issue codes; it never echoes variable
 values.
 
+## Inbound caller authentication
+
+A live Vercel collector must not rely on public network reachability. The ProofOS
+API already uses a Google-signed OIDC ID token when it calls a remote collector.
+The Vercel collector verifies that token before any probe or signing work runs.
+
+| Variable | Purpose |
+| --- | --- |
+| `PROOFOS_COLLECTOR_CALLER_AUDIENCE` | Exact HTTPS origin used as the Google ID-token audience for this collector. |
+| `PROOFOS_COLLECTOR_CALLER_SERVICE_ACCOUNT` | The single Cloud Run API service-account email allowed to invoke collection. |
+
+These are identity policy values, not secrets. The bearer token itself arrives
+on the request and is verified against Google's signing keys, the configured
+audience, the expected service-account email, and `email_verified=true`.
+Missing/invalid identity returns 401 before the collector probes the target or
+uses its signing key. A missing caller-auth policy keeps the Vercel collector
+not-ready with `vercel_caller_auth_not_configured`.
+
 ## Vercel -> Google without a service-account key
 
 When the observation target is private Google Cloud Run, a Vercel-hosted
