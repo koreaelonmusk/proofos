@@ -289,6 +289,36 @@ def _self_test() -> None:
     else:
         raise AssertionError("re-hashed semantic forgery was accepted")
 
+    ready_unsigned = {
+        **unsigned,
+        "status": "READY_FOR_AUTHENTICATED_E2E",
+        "health_outcome": "OBSERVED_HEALTH",
+        "trust_outcome": "READY_AND_ANONYMOUS_DENIED",
+        "bypass_attempted": True,
+        "readiness_issues": [],
+        "reasons": [
+            "collector_readiness_observed",
+            "anonymous_collection_denial_observed",
+            "authenticated_end_to_end_collection_not_yet_proven",
+        ],
+        "next_required_evidence": [
+            "authenticated_collection_with_fresh_nonce",
+            "signed_attestation_verification",
+            "tamper_nonce_and_profile_rejection",
+        ],
+    }
+    ready_verdict = {
+        **ready_unsigned,
+        "verdict_sha256": hashlib.sha256(
+            json.dumps(
+                ready_unsigned,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+    assert verify_verdict(ready_verdict)["status"] == "READY_FOR_AUTHENTICATED_E2E"
+
     print("live launch verdict verifier self-test OK")
 
 
