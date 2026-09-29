@@ -17,7 +17,6 @@ from urllib.parse import urlsplit
 from google.auth import identity_pool
 from google.auth.transport.requests import AuthorizedSession
 
-OIDC_TOKEN_ENV = "VERCEL_OIDC_TOKEN"
 WIF_PROVIDER_ENV = "PROOFOS_GCP_WIF_PROVIDER"
 SERVICE_ACCOUNT_ENV = "PROOFOS_GCP_WIF_SERVICE_ACCOUNT"
 
@@ -40,13 +39,11 @@ class WifExchangeError(RuntimeError):
 class VercelWifConfig:
     provider: str
     service_account: str
-    oidc_token: str
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "VercelWifConfig":
         provider = env.get(WIF_PROVIDER_ENV, "").strip()
         service_account = env.get(SERVICE_ACCOUNT_ENV, "").strip()
-        oidc_token = env.get(OIDC_TOKEN_ENV, "").strip()
 
         if not provider:
             raise WifConfigurationError(f"{WIF_PROVIDER_ENV} is required")
@@ -64,15 +61,9 @@ class VercelWifConfig:
         ):
             raise WifConfigurationError(f"{SERVICE_ACCOUNT_ENV} is invalid")
 
-        if not oidc_token:
-            raise WifConfigurationError(
-                f"{OIDC_TOKEN_ENV} is unavailable; Vercel OIDC must be enabled"
-            )
-
         return cls(
             provider=provider,
             service_account=service_account,
-            oidc_token=oidc_token,
         )
 
 
@@ -105,18 +96,23 @@ def fetch_id_token(
     target_audience: str,
     *,
     env: Mapping[str, str],
+    subject_token: str,
     session_factory=AuthorizedSession,
 ) -> str:
     """Mint a Google-signed ID token without long-lived Google credentials."""
 
     audience = _validated_target_audience(target_audience)
     config = VercelWifConfig.from_env(env)
+    if not subject_token.strip():
+        raise WifConfigurationError(
+            "Vercel runtime OIDC token is unavailable from request context"
+        )
 
     credentials = identity_pool.Credentials(
         audience=config.provider,
         subject_token_type=SUBJECT_TOKEN_TYPE,
         token_url=TOKEN_URL,
-        subject_token_supplier=VercelOidcSupplier(config.oidc_token),
+        subject_token_supplier=VercelOidcSupplier(subject_token),
         scopes=[CLOUD_PLATFORM_SCOPE],
     )
     session = session_factory(credentials)
