@@ -86,6 +86,11 @@ IAM Credentials generateIdToken
 Google-signed ID token, audience = exact Cloud Run origin
 ```
 
+The Vercel federation helper accepts only `https://*.run.app` origins. It will
+not mint or forward a Google identity token to an arbitrary HTTPS host. If a
+future deployment uses a Cloud Run custom domain, add that trust surface
+explicitly with its own validation and tests rather than weakening this rule.
+
 Vercel supplies `VERCEL_OIDC_TOKEN` as a platform system environment variable.
 It is not a team-managed ProofOS secret and must never be copied into Shared
 Environment Variables. The collector reads only this platform value; callers
