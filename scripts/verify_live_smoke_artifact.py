@@ -15,7 +15,7 @@ import sys
 from typing import Any
 from urllib.parse import urlsplit
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KIND = "vercel-live-smoke-observation"
 OUTCOMES = {"OBSERVED_HEALTH", "BLOCKED_BY_DEPLOYMENT_PROTECTION"}
 ALLOWED_RUNTIME_KEYS = {
@@ -66,6 +66,54 @@ def _canonical_hash_without_digest(evidence: dict[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def _positive_int(value: Any, *, field: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ArtifactVerificationError(f"{field} must be a positive integer")
+    return value
+
+
+def _environment(value: Any, *, field: str) -> str:
+    if not isinstance(value, str):
+        raise ArtifactVerificationError(f"{field} must be a string")
+    value = value.strip().lower()
+    if value not in {"production", "preview", "development"}:
+        raise ArtifactVerificationError(f"{field} is unsupported")
+    return value
+
+
+def _deployment_event(evidence: dict[str, Any]) -> dict[str, Any]:
+    event = evidence.get("deployment_event")
+    if not isinstance(event, dict):
+        raise ArtifactVerificationError("deployment_event is missing")
+    expected_keys = {
+        "github_deployment_id",
+        "github_deployment_status_id",
+        "environment",
+        "environment_url",
+        "source_git_sha",
+    }
+    if set(event) != expected_keys:
+        raise ArtifactVerificationError("deployment_event fields do not match schema")
+    return {
+        "github_deployment_id": _positive_int(
+            event["github_deployment_id"], field="deployment_event.github_deployment_id"
+        ),
+        "github_deployment_status_id": _positive_int(
+            event["github_deployment_status_id"],
+            field="deployment_event.github_deployment_status_id",
+        ),
+        "environment": _environment(
+            event["environment"], field="deployment_event.environment"
+        ),
+        "environment_url": _vercel_origin(
+            event["environment_url"], field="deployment_event.environment_url"
+        ),
+        "source_git_sha": _git_sha(
+            event["source_git_sha"], field="deployment_event.source_git_sha"
+        ),
+    }
+
+
 def verify_evidence(evidence: Any) -> dict[str, Any]:
     if not isinstance(evidence, dict):
         raise ArtifactVerificationError("artifact must be a JSON object")
@@ -85,6 +133,11 @@ def verify_evidence(evidence: Any) -> dict[str, Any]:
         raise ArtifactVerificationError("evidence SHA-256 mismatch")
 
     origin = _vercel_origin(evidence.get("target_origin"), field="target_origin")
+    deployment_event = _deployment_event(evidence)
+    if deployment_event["environment_url"] != origin:
+        raise ArtifactVerificationError(
+            "target origin does not match deployment event environment URL"
+        )
     if evidence.get("health_url") != f"{origin}/healthz":
         raise ArtifactVerificationError("health URL is not bound to target origin")
 
@@ -104,6 +157,10 @@ def verify_evidence(evidence: Any) -> dict[str, Any]:
     workflow_sha = evidence.get("workflow_source_git_sha")
     if workflow_sha is not None:
         workflow_sha = _git_sha(workflow_sha, field="workflow_source_git_sha")
+    if workflow_sha != deployment_event["source_git_sha"]:
+        raise ArtifactVerificationError(
+            "workflow source SHA does not match deployment event source SHA"
+        )
 
     if outcome == "BLOCKED_BY_DEPLOYMENT_PROTECTION":
         if evidence.get("http_status") not in {401, 403}:
@@ -117,6 +174,7 @@ def verify_evidence(evidence: Any) -> dict[str, Any]:
             "outcome": outcome,
             "target_origin": origin,
             "workflow_source_git_sha": workflow_sha,
+            "deployment_event": deployment_event,
             "evidence_sha256": digest.lower(),
         }
 
@@ -145,6 +203,10 @@ def verify_evidence(evidence: Any) -> dict[str, Any]:
     environment = runtime.get("environment")
     if environment not in {"production", "preview", "development"}:
         raise ArtifactVerificationError("runtime environment is missing or invalid")
+    if environment != deployment_event["environment"]:
+        raise ArtifactVerificationError(
+            "runtime environment does not match deployment event environment"
+        )
 
     runtime_sha = _git_sha(runtime.get("git_sha"), field="runtime.git_sha")
     if workflow_sha is None:
@@ -153,7 +215,11 @@ def verify_evidence(evidence: Any) -> dict[str, Any]:
         raise ArtifactVerificationError("runtime git SHA does not match workflow source SHA")
 
     if "url" in runtime:
-        _vercel_origin(runtime["url"], field="runtime.url")
+        runtime_url = _vercel_origin(runtime["url"], field="runtime.url")
+        if runtime_url != deployment_event["environment_url"]:
+            raise ArtifactVerificationError(
+                "runtime URL does not match deployment event environment URL"
+            )
 
     if not any("does not prove IAM policy" in item for item in boundary):
         raise ArtifactVerificationError("observed-health claim boundary is incomplete")
@@ -165,6 +231,7 @@ def verify_evidence(evidence: Any) -> dict[str, Any]:
         "deployment_id": deployment_id,
         "workflow_source_git_sha": workflow_sha,
         "runtime_git_sha": runtime_sha,
+        "deployment_event": deployment_event,
         "evidence_sha256": digest.lower(),
     }
 
@@ -180,7 +247,7 @@ def _self_test() -> None:
     sha = "0123456789abcdef0123456789abcdef01234567"
     blocked = _signed(
         {
-            "schema_version": 1,
+            "schema_version": SCHEMA_VERSION,
             "kind": KIND,
             "observed_at": "2026-09-30T00:00:00+00:00",
             "observer": "github-actions-http",
@@ -190,6 +257,13 @@ def _self_test() -> None:
             "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
             "bypass_attempted": False,
             "workflow_source_git_sha": sha,
+            "deployment_event": {
+                "github_deployment_id": 123,
+                "github_deployment_status_id": 456,
+                "environment": "preview",
+                "environment_url": "https://proofos-preview.vercel.app",
+                "source_git_sha": sha,
+            },
             "claim_boundary": [
                 "proves the deployment edge rejected the workflow request before application health was observed",
                 "does not prove the collector is healthy or unhealthy",
@@ -201,7 +275,7 @@ def _self_test() -> None:
 
     observed = _signed(
         {
-            "schema_version": 1,
+            "schema_version": SCHEMA_VERSION,
             "kind": KIND,
             "observed_at": "2026-09-30T00:00:00+00:00",
             "observer": "github-actions-http",
@@ -211,6 +285,13 @@ def _self_test() -> None:
             "outcome": "OBSERVED_HEALTH",
             "bypass_attempted": True,
             "workflow_source_git_sha": sha,
+            "deployment_event": {
+                "github_deployment_id": 123,
+                "github_deployment_status_id": 456,
+                "environment": "preview",
+                "environment_url": "https://proofos-preview.vercel.app",
+                "source_git_sha": sha,
+            },
             "observation": {
                 "status": "ok",
                 "service": "proofos-collector",
