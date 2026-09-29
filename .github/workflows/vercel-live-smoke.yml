@@ -65,6 +65,13 @@ jobs:
       - name: Verify persisted trust evidence independently
         run: python scripts/verify_live_trust_artifact.py "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json"
 
+      - name: Verify live evidence pair consistency
+        run: |
+          python scripts/verify_live_evidence_pair.py \
+            "artifacts/live-smoke/vercel-${{ github.run_id }}.json" \
+            "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json" \
+            --expected-git-sha "$GITHUB_SHA"
+
       - name: Upload live health evidence
         uses: actions/upload-artifact@v7
         with:
