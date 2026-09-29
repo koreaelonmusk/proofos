@@ -67,7 +67,7 @@ Required configuration:
 
 | Variable | Source |
 | --- | --- |
-| `VERCEL_OIDC_TOKEN` | Vercel system variable; short-lived |
+| `x-vercel-oidc-token` | Vercel function request context; short-lived platform token |
 | `PROOFOS_GCP_WIF_PROVIDER` | Google workload identity provider resource name |
 | `PROOFOS_GCP_WIF_SERVICE_ACCOUNT` | Service account allowed to mint the Cloud Run ID token |
 
@@ -85,6 +85,11 @@ IAM Credentials generateIdToken
    v
 Google-signed ID token, audience = exact Cloud Run origin
 ```
+
+At build/local-development time Vercel may expose `VERCEL_OIDC_TOKEN` as an
+environment variable, but at **function runtime** Vercel supplies the token in
+the `x-vercel-oidc-token` request header. The collector reads the runtime request
+context and never expects a persisted OIDC token variable.
 
 The external principal needs only the IAM permission required to mint an ID
 token for the selected service account. Bind the smallest principal set possible
