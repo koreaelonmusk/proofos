@@ -71,6 +71,12 @@ runtime correctly refused live authority because its configuration gate did not
 pass. The workflow never records bearer tokens, WIF tokens, signing keys,
 observation target URLs, or Vercel automation bypass secrets.
 
+Before upload, `verify_live_evidence_pair.py` independently validates both
+artifacts again and requires them to name the same exact Vercel origin and the
+same full workflow source Git SHA. It then derives a pair digest from the two
+constituent evidence hashes. Individually valid artifacts from different
+deployments therefore cannot be presented as one observation set.
+
 ## Explicit live model selection
 
 `PROOFOS_GEMINI_MODEL` selects the model used by all three live ADK roles.
