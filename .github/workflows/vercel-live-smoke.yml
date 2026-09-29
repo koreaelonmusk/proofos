@@ -65,12 +65,20 @@ jobs:
       - name: Verify persisted trust evidence independently
         run: python scripts/verify_live_trust_artifact.py "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json"
 
-      - name: Upload live smoke evidence
+      - name: Upload live health evidence
         uses: actions/upload-artifact@v7
         with:
-          path: |
-            artifacts/live-smoke/vercel-${{ github.run_id }}.json
-            artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json
+          name: vercel-live-health-${{ github.run_id }}
+          path: artifacts/live-smoke/vercel-${{ github.run_id }}.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload live trust evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: vercel-live-trust-${{ github.run_id }}
+          path: artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json
           archive: false
           if-no-files-found: error
           retention-days: 30
