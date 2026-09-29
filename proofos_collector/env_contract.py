@@ -32,8 +32,7 @@ COLLECTOR_OPTIONAL = frozenset(
 )
 
 # Static metadata required for Vercel -> Google Workload Identity Federation.
-# The actual OIDC subject token is deliberately not configuration: Vercel
-# supplies a fresh token in request context at function runtime.
+# VERCEL_OIDC_TOKEN is platform-managed by Vercel and is never user configuration.
 VERCEL_WIF_CONFIGURATION = frozenset(
     {
         "PROOFOS_GCP_WIF_PROVIDER",
@@ -41,10 +40,8 @@ VERCEL_WIF_CONFIGURATION = frozenset(
     }
 )
 
-VERCEL_RUNTIME_REQUEST_HEADERS = frozenset({"x-vercel-oidc-token"})
-
-# VERCEL_OIDC_TOKEN exists at build/local-development time. At function runtime
-# Vercel provides the token through x-vercel-oidc-token instead.
+# Vercel exposes VERCEL_OIDC_TOKEN as a system environment variable. It is
+# classified separately so it cannot be confused with a team-managed secret.
 PLATFORM_MANAGED_ENVIRONMENT = frozenset(
     {
         "VERCEL",
@@ -131,7 +128,6 @@ def contract_document() -> dict[str, object]:
         "collector_required_live": sorted(COLLECTOR_REQUIRED_LIVE),
         "collector_optional": sorted(COLLECTOR_OPTIONAL),
         "vercel_wif_configuration": sorted(VERCEL_WIF_CONFIGURATION),
-        "vercel_runtime_request_headers": sorted(VERCEL_RUNTIME_REQUEST_HEADERS),
         "platform_managed_environment": sorted(PLATFORM_MANAGED_ENVIRONMENT),
         "foreign_service_configuration": sorted(FOREIGN_SERVICE_CONFIGURATION),
         "forbidden_model_credentials": sorted(FORBIDDEN_MODEL_CREDENTIALS),
@@ -140,7 +136,7 @@ def contract_document() -> dict[str, object]:
             "private_signing_key": "file-path-only; never inline environment key material",
             "vercel_gcp_auth": "short-lived Vercel OIDC -> Google WIF; no service-account key file",
             "collector_scope": "observation and signing only; no model, journal, or verifier capability",
-            "runtime_oidc_source": "x-vercel-oidc-token request context, never caller configuration",
+            "runtime_oidc_source": "VERCEL_OIDC_TOKEN platform system environment, never caller configuration",
         },
     }
 
@@ -169,9 +165,6 @@ def validate_contract() -> None:
     )
     if "PROOFOS_COLLECTOR_PRIVATE_KEY" in classified_environment:
         raise RuntimeError("inline collector private key environment variables are forbidden")
-
-    if "x-vercel-oidc-token" not in VERCEL_RUNTIME_REQUEST_HEADERS:
-        raise RuntimeError("Vercel runtime OIDC request context is not classified")
 
     if "VERCEL_OIDC_TOKEN" not in PLATFORM_MANAGED_ENVIRONMENT:
         raise RuntimeError("Vercel build/local OIDC environment token is not classified")
