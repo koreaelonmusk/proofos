@@ -327,9 +327,21 @@ def _self_test() -> None:
         # Persisted artifacts remain verifiable long after capture because
         # freshness is evaluated against the immutable capture timestamp,
         # not the verifier's current wall clock.
+        historical_attestation = signer.sign(
+            execution_id=execution_id,
+            task_id=task_id,
+            kind=EVIDENCE_KIND,
+            profile_id=PROFILE_ID,
+            request_nonce=nonce,
+            observed_at=1_699_999_998.0,
+            outcome=Outcome.HEALTHY,
+            status_code=200,
+            response_digest_value="d" * 64,
+            detail="HEALTHY via runtime-health-v1",
+        )
         historical = json.loads(json.dumps(evidence))
         historical["observed_at"] = 1_700_000_000.0
-        historical["attestation"]["observed_at"] = 1_699_999_998.0
+        historical["attestation"] = historical_attestation.to_dict()
         historical_unsigned = {
             key: value for key, value in historical.items() if key != "evidence_sha256"
         }
@@ -342,8 +354,20 @@ def _self_test() -> None:
         ).hexdigest()
         assert verify_evidence(historical)["valid"]
 
+        stale_attestation = signer.sign(
+            execution_id=execution_id,
+            task_id=task_id,
+            kind=EVIDENCE_KIND,
+            profile_id=PROFILE_ID,
+            request_nonce=nonce,
+            observed_at=capture_time - 1000.0,
+            outcome=Outcome.HEALTHY,
+            status_code=200,
+            response_digest_value="d" * 64,
+            detail="HEALTHY via runtime-health-v1",
+        )
         stale_at_capture = json.loads(json.dumps(evidence))
-        stale_at_capture["attestation"]["observed_at"] = capture_time - 1000.0
+        stale_at_capture["attestation"] = stale_attestation.to_dict()
         stale_unsigned = {
             key: value
             for key, value in stale_at_capture.items()
