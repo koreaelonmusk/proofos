@@ -47,7 +47,11 @@ jobs:
             --url "$DEPLOYMENT_URL" \
             --output "artifacts/live-smoke/vercel-${{ github.run_id }}.json" \
             --record-protection-block \
-            --expected-git-sha "$GITHUB_SHA"
+            --expected-git-sha "$GITHUB_SHA" \
+            --github-deployment-id "${{ github.event.deployment.id }}" \
+            --github-deployment-status-id "${{ github.event.deployment_status.id }}" \
+            --github-environment "${{ github.event.deployment.environment }}" \
+            --environment-url "$DEPLOYMENT_URL"
 
       - name: Verify persisted smoke evidence independently
         run: python scripts/verify_live_smoke_artifact.py "artifacts/live-smoke/vercel-${{ github.run_id }}.json"
@@ -60,7 +64,11 @@ jobs:
           python scripts/verify_vercel_live_trust.py \
             --url "$DEPLOYMENT_URL" \
             --output "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json" \
-            --expected-git-sha "$GITHUB_SHA"
+            --expected-git-sha "$GITHUB_SHA" \
+            --github-deployment-id "${{ github.event.deployment.id }}" \
+            --github-deployment-status-id "${{ github.event.deployment_status.id }}" \
+            --github-environment "${{ github.event.deployment.environment }}" \
+            --environment-url "$DEPLOYMENT_URL"
 
       - name: Verify persisted trust evidence independently
         run: python scripts/verify_live_trust_artifact.py "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json"
@@ -70,6 +78,15 @@ jobs:
           python scripts/verify_live_evidence_pair.py \
             "artifacts/live-smoke/vercel-${{ github.run_id }}.json" \
             "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json" \
+            --expected-git-sha "$GITHUB_SHA" \
+            --output "artifacts/live-smoke/vercel-manifest-${{ github.run_id }}.json"
+
+      - name: Verify live evidence manifest independently
+        run: |
+          python scripts/verify_live_evidence_manifest.py \
+            "artifacts/live-smoke/vercel-${{ github.run_id }}.json" \
+            "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json" \
+            "artifacts/live-smoke/vercel-manifest-${{ github.run_id }}.json" \
             --expected-git-sha "$GITHUB_SHA"
 
       - name: Build conservative live launch verdict
@@ -77,11 +94,18 @@ jobs:
           python scripts/build_live_launch_verdict.py \
             "artifacts/live-smoke/vercel-${{ github.run_id }}.json" \
             "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json" \
+            "artifacts/live-smoke/vercel-manifest-${{ github.run_id }}.json" \
             --expected-git-sha "$GITHUB_SHA" \
             --output "artifacts/live-smoke/vercel-launch-verdict-${{ github.run_id }}.json"
 
       - name: Verify persisted launch verdict independently
-        run: python scripts/verify_live_launch_verdict.py "artifacts/live-smoke/vercel-launch-verdict-${{ github.run_id }}.json"
+        run: |
+          python scripts/verify_live_launch_verdict.py \
+            "artifacts/live-smoke/vercel-${{ github.run_id }}.json" \
+            "artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json" \
+            "artifacts/live-smoke/vercel-manifest-${{ github.run_id }}.json" \
+            "artifacts/live-smoke/vercel-launch-verdict-${{ github.run_id }}.json" \
+            --expected-git-sha "$GITHUB_SHA"
 
       - name: Upload live health evidence
         uses: actions/upload-artifact@v7
@@ -97,6 +121,15 @@ jobs:
         with:
           name: vercel-live-trust-${{ github.run_id }}
           path: artifacts/live-smoke/vercel-trust-${{ github.run_id }}.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload live evidence manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: vercel-live-manifest-${{ github.run_id }}
+          path: artifacts/live-smoke/vercel-manifest-${{ github.run_id }}.json
           archive: false
           if-no-files-found: error
           retention-days: 30

@@ -24,6 +24,10 @@ from verify_live_trust_artifact import (
 )
 
 
+MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_KIND = "vercel-live-evidence-bundle-manifest"
+
+
 class EvidencePairError(RuntimeError):
     pass
 
@@ -59,6 +63,11 @@ def verify_pair(
             "health and trust evidence bind to different workflow source SHAs"
         )
 
+    if health.get("deployment_event") != trust.get("deployment_event"):
+        raise EvidencePairError(
+            "health and trust evidence bind to different deployment events"
+        )
+
     source_sha = health["workflow_source_git_sha"]
     if source_sha is None:
         raise EvidencePairError("paired evidence requires a workflow source SHA")
@@ -71,6 +80,9 @@ def verify_pair(
         "trust_evidence_sha256": trust["evidence_sha256"],
         "target_origin": health["target_origin"],
         "workflow_source_git_sha": source_sha,
+        "github_deployment_id": health["deployment_event"]["github_deployment_id"],
+        "github_deployment_status_id": health["deployment_event"]["github_deployment_status_id"],
+        "deployment_environment": health["deployment_event"]["environment"],
     }
     pair_digest = hashlib.sha256(
         json.dumps(pair_material, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -85,6 +97,31 @@ def verify_pair(
     }
 
 
+def build_manifest(pair: dict[str, Any]) -> dict[str, Any]:
+    body = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "kind": MANIFEST_KIND,
+        "target_origin": pair["target_origin"],
+        "workflow_source_git_sha": pair["workflow_source_git_sha"],
+        "github_deployment_id": pair["github_deployment_id"],
+        "github_deployment_status_id": pair["github_deployment_status_id"],
+        "deployment_environment": pair["deployment_environment"],
+        "health_evidence_sha256": pair["health_evidence_sha256"],
+        "trust_evidence_sha256": pair["trust_evidence_sha256"],
+        "health_outcome": pair["health_outcome"],
+        "trust_outcome": pair["trust_outcome"],
+        "pair_sha256": pair["pair_sha256"],
+        "claim_boundary": [
+            "binds independently verified health and trust evidence to one deployment event",
+            "does not promote deployment evidence into ProofOS VERIFIED authority",
+        ],
+    }
+    digest = hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {**body, "manifest_sha256": digest}
+
+
 def _signed(sample: dict[str, Any]) -> dict[str, Any]:
     digest = hashlib.sha256(
         json.dumps(sample, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -95,7 +132,7 @@ def _signed(sample: dict[str, Any]) -> dict[str, Any]:
 def _health_sample(origin: str, sha: str) -> dict[str, Any]:
     return _signed(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": "vercel-live-smoke-observation",
             "observed_at": "2026-09-30T00:00:00+00:00",
             "observer": "github-actions-http",
@@ -105,6 +142,13 @@ def _health_sample(origin: str, sha: str) -> dict[str, Any]:
             "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
             "bypass_attempted": False,
             "workflow_source_git_sha": sha,
+            "deployment_event": {
+                "github_deployment_id": 123,
+                "github_deployment_status_id": 456,
+                "environment": "preview",
+                "environment_url": origin,
+                "source_git_sha": sha,
+            },
             "claim_boundary": [
                 "proves the deployment edge rejected the workflow request before application health was observed",
                 "does not prove the collector is healthy or unhealthy",
@@ -117,12 +161,19 @@ def _health_sample(origin: str, sha: str) -> dict[str, Any]:
 def _trust_sample(origin: str, sha: str) -> dict[str, Any]:
     return _signed(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": "vercel-live-trust-surface-observation",
             "observed_at": "2026-09-30T00:00:00+00:00",
             "observer": "github-actions-http",
             "target_origin": origin,
             "workflow_source_git_sha": sha,
+            "deployment_event": {
+                "github_deployment_id": 123,
+                "github_deployment_status_id": 456,
+                "environment": "preview",
+                "environment_url": origin,
+                "source_git_sha": sha,
+            },
             "bypass_attempted": False,
             "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
             "readiness": {
@@ -154,6 +205,8 @@ def _self_test() -> None:
     )
     assert paired["valid"]
     assert len(paired["pair_sha256"]) == 64
+    manifest = build_manifest(paired)
+    assert len(manifest["manifest_sha256"]) == 64
 
     cases = (
         (
@@ -189,6 +242,7 @@ def main() -> int:
     parser.add_argument("health_artifact", nargs="?", type=Path)
     parser.add_argument("trust_artifact", nargs="?", type=Path)
     parser.add_argument("--expected-git-sha", default="")
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
@@ -217,6 +271,14 @@ def main() -> int:
         print(f"live evidence pair INVALID: {exc}", file=sys.stderr)
         return 1
 
+    manifest = build_manifest(result)
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(f"manifest: {args.output}")
     print(json.dumps(result, sort_keys=True))
     return 0
 

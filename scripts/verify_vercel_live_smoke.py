@@ -28,6 +28,7 @@ ALLOWED_RUNTIME_KEYS = {
     "git_sha",
     "url",
 }
+SCHEMA_VERSION = 2
 EXPECTED_TOP_LEVEL_KEYS = {"status", "service", "runtime"}
 
 
@@ -60,7 +61,50 @@ def _validated_git_sha(value: str, *, label: str) -> str:
     return value
 
 
-def _validated_health(payload: Any, *, expected_git_sha: str = "") -> dict[str, Any]:
+def _positive_event_id(value: str, *, label: str) -> int:
+    value = value.strip()
+    if not value.isdigit() or int(value) <= 0:
+        raise SmokeFailure(f"{label} must be a positive integer")
+    return int(value)
+
+
+def _normalized_environment(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in {"production", "preview", "development"}:
+        raise SmokeFailure("deployment environment is missing or unsupported")
+    return normalized
+
+
+def _deployment_event_binding(
+    *,
+    deployment_id: str,
+    deployment_status_id: str,
+    environment: str,
+    environment_url: str,
+    source_git_sha: str,
+) -> dict[str, Any]:
+    return {
+        "github_deployment_id": _positive_event_id(
+            deployment_id, label="GitHub deployment id"
+        ),
+        "github_deployment_status_id": _positive_event_id(
+            deployment_status_id, label="GitHub deployment status id"
+        ),
+        "environment": _normalized_environment(environment),
+        "environment_url": _validated_vercel_origin(environment_url),
+        "source_git_sha": _validated_git_sha(
+            source_git_sha, label="deployment source git SHA"
+        ),
+    }
+
+
+def _validated_health(
+    payload: Any,
+    *,
+    expected_git_sha: str = "",
+    expected_environment: str = "",
+    expected_origin: str = "",
+) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise SmokeFailure("health response must be a JSON object")
 
@@ -91,6 +135,10 @@ def _validated_health(payload: Any, *, expected_git_sha: str = "") -> dict[str, 
     environment = runtime.get("environment")
     if environment not in {"production", "preview", "development"}:
         raise SmokeFailure("Vercel environment is missing or invalid")
+    if expected_environment and environment != _normalized_environment(expected_environment):
+        raise SmokeFailure(
+            "runtime environment does not match deployment event environment"
+        )
 
     runtime_git_sha = runtime.get("git_sha")
     if not isinstance(runtime_git_sha, str):
@@ -103,7 +151,11 @@ def _validated_health(payload: Any, *, expected_git_sha: str = "") -> dict[str, 
 
     runtime_url = runtime.get("url")
     if runtime_url is not None:
-        _validated_vercel_origin(runtime_url)
+        runtime_url = _validated_vercel_origin(runtime_url)
+        if expected_origin and runtime_url != _validated_vercel_origin(expected_origin):
+            raise SmokeFailure(
+                "runtime URL does not match deployment event environment URL"
+            )
 
     return {
         "status": "ok",
@@ -124,6 +176,7 @@ def observe(
     bypass_secret: str = "",
     record_protection_block: bool = False,
     expected_git_sha: str = "",
+    deployment_event: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     origin = _validated_vercel_origin(origin)
     health_url = f"{origin}/healthz"
@@ -143,7 +196,7 @@ def observe(
         if exc.code in {401, 403} and record_protection_block:
             return _hash_evidence(
                 {
-                    "schema_version": 1,
+                    "schema_version": SCHEMA_VERSION,
                     "kind": "vercel-live-smoke-observation",
                     "observed_at": datetime.now(timezone.utc).isoformat(),
                     "observer": "github-actions-http",
@@ -157,6 +210,7 @@ def observe(
                         if expected_git_sha
                         else None
                     ),
+                    "deployment_event": deployment_event,
                     "claim_boundary": [
                         "proves the deployment edge rejected the workflow request before application health was observed",
                         "does not prove the collector is healthy or unhealthy",
@@ -176,10 +230,19 @@ def observe(
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SmokeFailure("health endpoint did not return valid UTF-8 JSON") from exc
 
-    validated = _validated_health(payload, expected_git_sha=expected_git_sha)
+    validated = _validated_health(
+        payload,
+        expected_git_sha=expected_git_sha,
+        expected_environment=(
+            str(deployment_event.get("environment", "")) if deployment_event else ""
+        ),
+        expected_origin=(
+            str(deployment_event.get("environment_url", "")) if deployment_event else ""
+        ),
+    )
     return _hash_evidence(
         {
-            "schema_version": 1,
+            "schema_version": SCHEMA_VERSION,
             "kind": "vercel-live-smoke-observation",
             "observed_at": datetime.now(timezone.utc).isoformat(),
             "observer": "github-actions-http",
@@ -193,6 +256,7 @@ def observe(
                 if expected_git_sha
                 else None
             ),
+            "deployment_event": deployment_event,
             "observation": validated,
             "claim_boundary": [
                 "proves the HTTPS health endpoint answered the expected public contract",
@@ -216,9 +280,18 @@ def _self_test() -> None:
             "url": "https://proofos-preview.vercel.app",
         },
     }
+    binding = _deployment_event_binding(
+        deployment_id="123",
+        deployment_status_id="456",
+        environment="Preview",
+        environment_url="https://proofos-preview.vercel.app",
+        source_git_sha="0123456789abcdef0123456789abcdef01234567",
+    )
     validated = _validated_health(
         good,
-        expected_git_sha="0123456789abcdef0123456789abcdef01234567",
+        expected_git_sha=binding["source_git_sha"],
+        expected_environment=binding["environment"],
+        expected_origin=binding["environment_url"],
     )
     assert validated["runtime"]["deployment_id"] == "dpl_contract_test"
 
@@ -256,6 +329,10 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--record-protection-block", action="store_true")
     parser.add_argument("--expected-git-sha", default="")
+    parser.add_argument("--github-deployment-id", default="")
+    parser.add_argument("--github-deployment-status-id", default="")
+    parser.add_argument("--github-environment", default="")
+    parser.add_argument("--environment-url", default="")
     args = parser.parse_args()
 
     if args.self_test:
@@ -266,12 +343,20 @@ def main() -> int:
         parser.error("--url and --output are required unless --self-test is used")
 
     try:
+        deployment_event = _deployment_event_binding(
+            deployment_id=args.github_deployment_id,
+            deployment_status_id=args.github_deployment_status_id,
+            environment=args.github_environment,
+            environment_url=args.environment_url,
+            source_git_sha=args.expected_git_sha,
+        )
         evidence = observe(
             args.url,
             timeout=args.timeout,
             bypass_secret=os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", ""),
             record_protection_block=args.record_protection_block,
             expected_git_sha=args.expected_git_sha,
+            deployment_event=deployment_event,
         )
     except SmokeFailure as exc:
         print(f"live smoke FAILED: {exc}", file=sys.stderr)

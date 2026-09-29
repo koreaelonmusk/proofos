@@ -79,22 +79,20 @@ deployments therefore cannot be presented as one observation set.
 
 ## Machine launch verdict
 
-The live workflow then derives a conservative launch verdict from that verified
-pair and verifies the verdict again in a separate process.
+After the sealed manifest is independently verified, ProofOS derives a separate
+launch verdict from that exact bundle and verifies the verdict again against the
+health, trust, and manifest artifacts.
 
-- `HOLD`: the next launch property is not proven yet. This does not mean the
-  deployment is unhealthy.
-- `READY_FOR_AUTHENTICATED_E2E`: application readiness and anonymous
-  collection denial were both directly observed. This is still not production
-  GO; it authorizes only the next evidence step, an authenticated collection
-  with a fresh nonce followed by attestation verification and adversarial
-  rejection checks.
+- `HOLD`: the next launch property is not proven. This does not mean the service
+  is unhealthy.
+- `READY_FOR_AUTHENTICATED_E2E`: application readiness and anonymous caller
+  denial were directly observed. This is not production GO. It authorizes only
+  the next evidence step: authenticated collection with a fresh nonce, signature
+  verification, and adversarial rejection checks.
 
-The verdict artifact binds the health hash, trust hash, pair hash, exact Vercel
-origin, and full Git SHA. It records stable reasons and the next required
-evidence so operators do not have to infer readiness from CI colors or HTTP
-status alone. `verify_live_launch_verdict.py` independently recomputes the
-verdict digest and rejects contradictory status/outcome combinations.
+The verdict binds the manifest hash, pair hash, constituent evidence hashes,
+GitHub deployment/status IDs, deployment environment, Vercel origin, and full
+source Git SHA. A verdict from another deployment bundle cannot be substituted.
 
 ## Explicit live model selection
 

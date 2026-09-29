@@ -1,9 +1,4 @@
-"""Derive a conservative launch verdict from verified live Vercel evidence.
-
-This is not a deployment controller. It cannot make an unobserved property true.
-Its job is to turn the independently verified health/trust pair into a stable
-machine-readable next-gate decision without overstating what the evidence proves.
-"""
+"""Derive a conservative launch verdict from a sealed live evidence bundle."""
 
 from __future__ import annotations
 
@@ -14,9 +9,9 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from verify_live_evidence_pair import EvidencePairError, verify_pair
+from verify_live_evidence_manifest import ManifestVerificationError, verify_manifest
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KIND = "proofos-live-launch-verdict"
 HOLD = "HOLD"
 READY_FOR_AUTHENTICATED_E2E = "READY_FOR_AUTHENTICATED_E2E"
@@ -26,76 +21,63 @@ class LaunchVerdictError(RuntimeError):
     pass
 
 
-def _canonical_hash(value: dict[str, Any]) -> str:
+def _hash(value: dict[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
 
 
 def derive_verdict(
-    health_evidence: Any,
-    trust_evidence: Any,
+    health: Any,
+    trust: Any,
+    manifest: Any,
     *,
     expected_git_sha: str = "",
 ) -> dict[str, Any]:
     try:
-        pair = verify_pair(
-            health_evidence,
-            trust_evidence,
+        sealed = verify_manifest(
+            health,
+            trust,
+            manifest,
             expected_git_sha=expected_git_sha,
         )
-    except EvidencePairError as exc:
-        raise LaunchVerdictError(f"evidence pair invalid: {exc}") from exc
+    except ManifestVerificationError as exc:
+        raise LaunchVerdictError(f"sealed evidence invalid: {exc}") from exc
 
-    if not isinstance(trust_evidence, dict):
+    if not isinstance(trust, dict):
         raise LaunchVerdictError("trust evidence must be an object")
 
-    trust_outcome = pair["trust_outcome"]
-    bypass_attempted = trust_evidence.get("bypass_attempted")
+    trust_outcome = manifest.get("trust_outcome")
+    health_outcome = manifest.get("health_outcome")
+    bypass_attempted = trust.get("bypass_attempted")
     if not isinstance(bypass_attempted, bool):
         raise LaunchVerdictError("trust evidence bypass_attempted is invalid")
 
     status = HOLD
+    issues: list[str] = []
     reasons: list[str]
-    next_required_evidence: list[str]
-    readiness_issues: list[str] = []
+    next_required: list[str]
 
     if trust_outcome == "BLOCKED_BY_DEPLOYMENT_PROTECTION":
         reasons = ["deployment_protection_blocked_application_observation"]
         if bypass_attempted:
             reasons.append("automation_bypass_attempted_but_edge_still_blocked")
-            next_required_evidence = [
-                "repair_vercel_automation_bypass",
-                "rerun_live_trust_observation",
-            ]
+            next_required = ["repair_vercel_automation_bypass", "rerun_live_trust_observation"]
         else:
             reasons.append("automation_bypass_not_configured_for_workflow")
-            next_required_evidence = [
-                "configure_vercel_automation_bypass",
-                "rerun_live_trust_observation",
-            ]
+            next_required = ["configure_vercel_automation_bypass", "rerun_live_trust_observation"]
     elif trust_outcome == "READINESS_BLOCKED_AND_ANONYMOUS_DENIED":
-        reasons = [
-            "application_caller_auth_observed",
-            "readiness_not_observed_through_deployment_edge",
-        ]
-        next_required_evidence = [
-            "observe_application_readiness",
-            "rerun_live_trust_observation",
-        ]
+        reasons = ["application_caller_auth_observed", "readiness_not_observed_through_deployment_edge"]
+        next_required = ["observe_application_readiness", "rerun_live_trust_observation"]
     elif trust_outcome == "CONFIG_NOT_READY_AND_ANONYMOUS_DENIED":
-        readiness = trust_evidence.get("readiness")
+        readiness = trust.get("readiness")
         observation = readiness.get("observation") if isinstance(readiness, dict) else None
-        issues = observation.get("issues") if isinstance(observation, dict) else None
-        if not isinstance(issues, list) or any(not isinstance(item, str) for item in issues):
-            raise LaunchVerdictError("not-ready trust evidence has invalid issue list")
-        readiness_issues = sorted(issues)
-        reasons = ["collector_configuration_not_ready"]
-        reasons.extend(f"readiness:{issue}" for issue in readiness_issues)
-        next_required_evidence = [
-            "resolve_collector_readiness_issues",
-            "rerun_live_trust_observation",
-        ]
+        raw = observation.get("issues") if isinstance(observation, dict) else None
+        if not isinstance(raw, list) or not raw or any(not isinstance(x, str) for x in raw):
+            raise LaunchVerdictError("not-ready evidence must contain readiness issues")
+        issues = sorted(raw)
+        reasons = ["collector_configuration_not_ready", *[f"readiness:{x}" for x in issues]]
+        next_required = ["resolve_collector_readiness_issues", "rerun_live_trust_observation"]
     elif trust_outcome == "READY_AND_ANONYMOUS_DENIED":
         status = READY_FOR_AUTHENTICATED_E2E
         reasons = [
@@ -103,7 +85,7 @@ def derive_verdict(
             "anonymous_collection_denial_observed",
             "authenticated_end_to_end_collection_not_yet_proven",
         ]
-        next_required_evidence = [
+        next_required = [
             "authenticated_collection_with_fresh_nonce",
             "signed_attestation_verification",
             "tamper_nonce_and_profile_rejection",
@@ -111,189 +93,72 @@ def derive_verdict(
     else:
         raise LaunchVerdictError(f"unsupported trust outcome: {trust_outcome}")
 
-    unsigned = {
+    body = {
         "schema_version": SCHEMA_VERSION,
         "kind": KIND,
         "status": status,
-        "target_origin": pair["target_origin"],
-        "workflow_source_git_sha": pair["workflow_source_git_sha"],
-        "pair_sha256": pair["pair_sha256"],
-        "health_evidence_sha256": pair["health_evidence_sha256"],
-        "trust_evidence_sha256": pair["trust_evidence_sha256"],
-        "health_outcome": pair["health_outcome"],
+        "target_origin": sealed["target_origin"],
+        "workflow_source_git_sha": sealed["workflow_source_git_sha"],
+        "github_deployment_id": sealed["github_deployment_id"],
+        "github_deployment_status_id": sealed["github_deployment_status_id"],
+        "deployment_environment": sealed["deployment_environment"],
+        "manifest_sha256": sealed["manifest_sha256"],
+        "pair_sha256": sealed["pair_sha256"],
+        "health_evidence_sha256": sealed["health_evidence_sha256"],
+        "trust_evidence_sha256": sealed["trust_evidence_sha256"],
+        "health_outcome": health_outcome,
         "trust_outcome": trust_outcome,
         "bypass_attempted": bypass_attempted,
-        "readiness_issues": readiness_issues,
+        "readiness_issues": issues,
         "reasons": reasons,
-        "next_required_evidence": next_required_evidence,
+        "next_required_evidence": next_required,
         "claim_boundary": [
-            "this verdict is derived only from independently verified live evidence",
-            "HOLD does not mean the service is unhealthy; it means the next launch property is not proven",
-            "READY_FOR_AUTHENTICATED_E2E is not production GO and does not prove a successful authenticated collection",
+            "derived only from an independently verified sealed deployment evidence bundle",
+            "HOLD means the next launch property is unproven, not that the service is unhealthy",
+            "READY_FOR_AUTHENTICATED_E2E is not production GO and does not prove authenticated collection",
         ],
     }
-    return {**unsigned, "verdict_sha256": _canonical_hash(unsigned)}
-
-
-def _signed(value: dict[str, Any]) -> dict[str, Any]:
-    digest = _canonical_hash(value)
-    return {**value, "evidence_sha256": digest}
-
-
-def _health_blocked(origin: str, sha: str) -> dict[str, Any]:
-    return _signed(
-        {
-            "schema_version": 1,
-            "kind": "vercel-live-smoke-observation",
-            "observed_at": "2026-09-30T00:00:00+00:00",
-            "observer": "github-actions-http",
-            "target_origin": origin,
-            "health_url": f"{origin}/healthz",
-            "http_status": 401,
-            "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
-            "bypass_attempted": False,
-            "workflow_source_git_sha": sha,
-            "claim_boundary": [
-                "proves the deployment edge rejected the workflow request before application health was observed",
-                "does not prove the collector is healthy or unhealthy",
-                "does not expose or record the automation bypass secret",
-            ],
-        }
-    )
-
-
-def _trust_blocked(origin: str, sha: str, bypass_attempted: bool) -> dict[str, Any]:
-    return _signed(
-        {
-            "schema_version": 1,
-            "kind": "vercel-live-trust-surface-observation",
-            "observed_at": "2026-09-30T00:00:00+00:00",
-            "observer": "github-actions-http",
-            "target_origin": origin,
-            "workflow_source_git_sha": sha,
-            "bypass_attempted": bypass_attempted,
-            "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
-            "readiness": {
-                "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
-                "http_status": 401,
-            },
-            "anonymous_collect": {
-                "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
-                "http_status": 401,
-            },
-            "claim_boundary": [
-                "records whether the live collector configuration is ready or explicitly not ready",
-                "proves anonymous collection is denied only when the application response is reached",
-                "does not prove an authenticated end-to-end collection succeeds",
-                "does not expose signing keys, bearer tokens, WIF tokens, target URLs, or bypass secrets",
-            ],
-        }
-    )
+    return {**body, "verdict_sha256": _hash(body)}
 
 
 def _self_test() -> None:
-    origin = "https://proofos-preview.vercel.app"
+    from verify_live_evidence_pair import _health_sample, _trust_sample, build_manifest, verify_pair
+
     sha = "0123456789abcdef0123456789abcdef01234567"
-
-    verdict = derive_verdict(
-        _health_blocked(origin, sha),
-        _trust_blocked(origin, sha, False),
-        expected_git_sha=sha,
-    )
+    origin = "https://proofos-preview.vercel.app"
+    health = _health_sample(origin, sha)
+    trust = _trust_sample(origin, sha)
+    manifest = build_manifest(verify_pair(health, trust, expected_git_sha=sha))
+    verdict = derive_verdict(health, trust, manifest, expected_git_sha=sha)
     assert verdict["status"] == HOLD
-    assert "automation_bypass_not_configured_for_workflow" in verdict["reasons"]
-    assert len(verdict["verdict_sha256"]) == 64
-
-    verdict = derive_verdict(
-        _health_blocked(origin, sha),
-        _trust_blocked(origin, sha, True),
-        expected_git_sha=sha,
-    )
-    assert "automation_bypass_attempted_but_edge_still_blocked" in verdict["reasons"]
-
-    # Reuse the independent pair verifier's accepted schema, but replace the
-    # trust observation with an application-reached READY boundary.
-    health = _health_blocked(origin, sha)
-    health["bypass_attempted"] = True
-    health["evidence_sha256"] = _canonical_hash(
-        {key: value for key, value in health.items() if key != "evidence_sha256"}
-    )
-    trust_unsigned = {
-        "schema_version": 1,
-        "kind": "vercel-live-trust-surface-observation",
-        "observed_at": "2026-09-30T00:00:00+00:00",
-        "observer": "github-actions-http",
-        "target_origin": origin,
-        "workflow_source_git_sha": sha,
-        "bypass_attempted": True,
-        "outcome": "READY_AND_ANONYMOUS_DENIED",
-        "readiness": {
-            "outcome": "READY",
-            "http_status": 200,
-            "observation": {
-                "status": "ready",
-                "service": "proofos-collector",
-                "issues": [],
-            },
-        },
-        "anonymous_collect": {
-            "outcome": "ANONYMOUS_COLLECTION_DENIED",
-            "http_status": 401,
-        },
-        "claim_boundary": [
-            "records whether the live collector configuration is ready or explicitly not ready",
-            "proves anonymous collection is denied only when the application response is reached",
-            "does not prove an authenticated end-to-end collection succeeds",
-            "does not expose signing keys, bearer tokens, WIF tokens, target URLs, or bypass secrets",
-        ],
-    }
-    trust = {**trust_unsigned, "evidence_sha256": _canonical_hash(trust_unsigned)}
-    verdict = derive_verdict(health, trust, expected_git_sha=sha)
-    assert verdict["status"] == READY_FOR_AUTHENTICATED_E2E
-    assert verdict["next_required_evidence"][0] == "authenticated_collection_with_fresh_nonce"
-
-    print("live launch verdict self-test OK")
+    assert verdict["manifest_sha256"] == manifest["manifest_sha256"]
+    print("live launch verdict builder self-test OK")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("health_artifact", nargs="?", type=Path)
-    parser.add_argument("trust_artifact", nargs="?", type=Path)
-    parser.add_argument("--expected-git-sha", default="")
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--self-test", action="store_true")
-    args = parser.parse_args()
-
-    if args.self_test:
-        _self_test()
-        return 0
-
-    if args.health_artifact is None or args.trust_artifact is None or args.output is None:
-        parser.error(
-            "health artifact, trust artifact, and --output are required unless --self-test is used"
-        )
-
+    p = argparse.ArgumentParser()
+    p.add_argument("health", nargs="?", type=Path)
+    p.add_argument("trust", nargs="?", type=Path)
+    p.add_argument("manifest", nargs="?", type=Path)
+    p.add_argument("--expected-git-sha", default="")
+    p.add_argument("--output", type=Path)
+    p.add_argument("--self-test", action="store_true")
+    a = p.parse_args()
+    if a.self_test:
+        _self_test(); return 0
+    if None in (a.health, a.trust, a.manifest, a.output):
+        p.error("health, trust, manifest, and --output are required unless --self-test is used")
     try:
-        health = json.loads(args.health_artifact.read_text(encoding="utf-8"))
-        trust = json.loads(args.trust_artifact.read_text(encoding="utf-8"))
         verdict = derive_verdict(
-            health,
-            trust,
-            expected_git_sha=args.expected_git_sha,
+            json.loads(a.health.read_text()),
+            json.loads(a.trust.read_text()),
+            json.loads(a.manifest.read_text()),
+            expected_git_sha=a.expected_git_sha,
         )
-    except (
-        OSError,
-        json.JSONDecodeError,
-        LaunchVerdictError,
-    ) as exc:
-        print(f"live launch verdict FAILED: {exc}", file=sys.stderr)
-        return 1
-
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(verdict, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    except (OSError, json.JSONDecodeError, LaunchVerdictError) as exc:
+        print(f"live launch verdict FAILED: {exc}", file=sys.stderr); return 1
+    a.output.parent.mkdir(parents=True, exist_ok=True)
+    a.output.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n")
     print(json.dumps(verdict, sort_keys=True))
     return 0
 

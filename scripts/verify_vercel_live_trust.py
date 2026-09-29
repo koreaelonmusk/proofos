@@ -26,6 +26,7 @@ from urllib.request import Request, urlopen
 
 EXPECTED_READY_KEYS = {"status", "service", "issues"}
 ALLOWED_READY_STATUSES = {"ready", "not_ready"}
+SCHEMA_VERSION = 2
 PROTECTION_STATUSES = {401, 403}
 
 
@@ -57,6 +58,41 @@ def _validated_git_sha(value: str) -> str:
     if len(value) != 40 or any(ch not in "0123456789abcdef" for ch in value):
         raise TrustSmokeFailure("expected git SHA is not a full 40-character SHA")
     return value
+
+
+def _positive_event_id(value: str, *, label: str) -> int:
+    value = value.strip()
+    if not value.isdigit() or int(value) <= 0:
+        raise TrustSmokeFailure(f"{label} must be a positive integer")
+    return int(value)
+
+
+def _normalized_environment(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in {"production", "preview", "development"}:
+        raise TrustSmokeFailure("deployment environment is missing or unsupported")
+    return normalized
+
+
+def _deployment_event_binding(
+    *,
+    deployment_id: str,
+    deployment_status_id: str,
+    environment: str,
+    environment_url: str,
+    source_git_sha: str,
+) -> dict[str, Any]:
+    return {
+        "github_deployment_id": _positive_event_id(
+            deployment_id, label="GitHub deployment id"
+        ),
+        "github_deployment_status_id": _positive_event_id(
+            deployment_status_id, label="GitHub deployment status id"
+        ),
+        "environment": _normalized_environment(environment),
+        "environment_url": _validated_vercel_origin(environment_url),
+        "source_git_sha": _validated_git_sha(source_git_sha),
+    }
 
 
 def _validated_ready_payload(payload: Any, http_status: int) -> dict[str, Any]:
@@ -235,8 +271,22 @@ def observe(
     timeout: float = 10.0,
     bypass_secret: str = "",
     expected_git_sha: str = "",
+    deployment_event: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     origin = _validated_vercel_origin(origin)
+    if deployment_event:
+        if deployment_event.get("environment_url") != origin:
+            raise TrustSmokeFailure(
+                "target origin does not match deployment event environment URL"
+            )
+        if (
+            expected_git_sha
+            and deployment_event.get("source_git_sha")
+            != _validated_git_sha(expected_git_sha)
+        ):
+            raise TrustSmokeFailure(
+                "deployment event source SHA does not match expected git SHA"
+            )
     readiness = _observe_readiness(
         origin,
         timeout=timeout,
@@ -275,7 +325,7 @@ def observe(
 
     return _hash_evidence(
         {
-            "schema_version": 1,
+            "schema_version": SCHEMA_VERSION,
             "kind": "vercel-live-trust-surface-observation",
             "observed_at": datetime.now(timezone.utc).isoformat(),
             "observer": "github-actions-http",
@@ -283,6 +333,7 @@ def observe(
             "workflow_source_git_sha": (
                 _validated_git_sha(expected_git_sha) if expected_git_sha else None
             ),
+            "deployment_event": deployment_event,
             "bypass_attempted": bool(bypass_secret),
             "outcome": outcome,
             "readiness": readiness,
@@ -359,6 +410,10 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--expected-git-sha", default="")
+    parser.add_argument("--github-deployment-id", default="")
+    parser.add_argument("--github-deployment-status-id", default="")
+    parser.add_argument("--github-environment", default="")
+    parser.add_argument("--environment-url", default="")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
@@ -370,11 +425,19 @@ def main() -> int:
         parser.error("--url and --output are required unless --self-test is used")
 
     try:
+        deployment_event = _deployment_event_binding(
+            deployment_id=args.github_deployment_id,
+            deployment_status_id=args.github_deployment_status_id,
+            environment=args.github_environment,
+            environment_url=args.environment_url,
+            source_git_sha=args.expected_git_sha,
+        )
         evidence = observe(
             args.url,
             timeout=args.timeout,
             bypass_secret=os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", ""),
             expected_git_sha=args.expected_git_sha,
+            deployment_event=deployment_event,
         )
     except TrustSmokeFailure as exc:
         print(f"live trust smoke FAILED: {exc}", file=sys.stderr)
