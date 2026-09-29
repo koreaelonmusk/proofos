@@ -145,6 +145,11 @@ For team Shared Environment Variables:
 7. After changing environment variables, redeploy/restart before evaluating
    `/readyz`; readiness is intentionally snapshotted at process startup.
 
+For an authenticated target on Vercel, startup readiness also requires the
+platform-provided `VERCEL_OIDC_TOKEN`. If it is unavailable, `/readyz` returns
+503 with `vercel_oidc_token_unavailable`; the collector never falls back to an
+anonymous probe or a static Google key.
+
 The public `/healthz` endpoint proves process liveness only. `/readyz` proves
 that the collector configuration passed the local launch gate. Neither endpoint
 alone proves IAM policy, target reachability, signing-key durability, or an
