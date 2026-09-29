@@ -168,4 +168,6 @@ jobs:
         run: uv run python -m proofos_collector.env_contract --check
       - name: Validate the Vercel deploy contract
         run: uv run python scripts/validate_vercel_deploy.py
+      - name: Validate the live smoke evidence collector
+        run: uv run python scripts/verify_vercel_live_smoke.py --self-test
 
