@@ -47,6 +47,10 @@ class CollectorEnvironmentContractTests(unittest.TestCase):
             document["foreign_service_configuration"],
         )
         self.assertIn("PROOFOS_GCP_WIF_PROVIDER", document["vercel_wif_configuration"])
+        self.assertIn(
+            "PROOFOS_COLLECTOR_CALLER_SERVICE_ACCOUNT",
+            document["vercel_caller_auth_configuration"],
+        )
         self.assertIn("VERCEL_OIDC_TOKEN", document["platform_managed_environment"])
 
     def test_collector_rejects_foreign_capabilities_without_echoing_values(self):
@@ -93,10 +97,13 @@ class CollectorEnvironmentContractTests(unittest.TestCase):
             WIF_PROVIDER_ENV: PROVIDER,
             SERVICE_ACCOUNT_ENV: SERVICE_ACCOUNT,
             "VERCEL_OIDC_TOKEN": OIDC_TOKEN,
+            "PROOFOS_COLLECTOR_CALLER_AUDIENCE": "https://proofos.example.vercel.app",
+            "PROOFOS_COLLECTOR_CALLER_SERVICE_ACCOUNT": SERVICE_ACCOUNT,
         }
         ready_issues = configuration_issues(ready)
         self.assertNotIn("vercel_wif_not_configured", ready_issues)
         self.assertNotIn("vercel_oidc_token_unavailable", ready_issues)
+        self.assertNotIn("vercel_caller_auth_not_configured", ready_issues)
 
 
 class VercelWorkloadIdentityTests(unittest.TestCase):
