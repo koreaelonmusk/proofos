@@ -138,7 +138,10 @@ def _observe_readiness(
                 "http_status": exc.code,
                 "observation": validated,
             }
-        if exc.code in PROTECTION_STATUSES and payload is None:
+        # /readyz never returns 401/403 itself. If the edge returns either
+        # status, body formatting is irrelevant: application readiness was not
+        # observed.
+        if exc.code in PROTECTION_STATUSES:
             return {
                 "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
                 "http_status": exc.code,
@@ -199,7 +202,10 @@ def _observe_anonymous_collect_denial(
                 "http_status": 401,
             }
 
-        if exc.code in PROTECTION_STATUSES and payload is None:
+        # Exact ProofOS 401 JSON was handled above. Any remaining 401/403 came
+        # from a layer whose application identity cannot be proven here, so
+        # preserve it as edge protection instead of guessing.
+        if exc.code in PROTECTION_STATUSES:
             return {
                 "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
                 "http_status": exc.code,
