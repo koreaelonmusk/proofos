@@ -91,8 +91,10 @@ environment variable, but at **function runtime** Vercel supplies the token in
 the `x-vercel-oidc-token` request header. The collector reads the runtime request
 context and never expects a persisted OIDC token variable.
 
-The external principal needs only the IAM permission required to mint an ID
-token for the selected service account. Bind the smallest principal set possible
+The external principal needs only `iam.serviceAccounts.getOpenIdToken` on the
+selected service account. Prefer Google's narrow
+`roles/iam.serviceAccountOpenIdTokenCreator` role when this is the only token
+operation required. Bind the smallest principal set possible
 and restrict the Google provider to the intended Vercel team, project, and
 deployment environment.
 
