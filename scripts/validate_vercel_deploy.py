@@ -107,6 +107,7 @@ def validate() -> list[str]:
         "VERCEL_DEPLOYMENT_ID": "dpl_contract_test",
         "VERCEL_REGION": "icn1",
         "VERCEL_URL": "proofos-contract-test.vercel.app",
+        "VERCEL_GIT_COMMIT_SHA": "0123456789abcdef0123456789abcdef01234567",
         "GEMINI_API_KEY": "must-not-leak",
         "VERCEL_OIDC_TOKEN": "must-not-leak",
     }
@@ -116,6 +117,7 @@ def validate() -> list[str]:
         "environment": "preview",
         "deployment_id": "dpl_contract_test",
         "region": "icn1",
+        "git_sha": "0123456789abcdef0123456789abcdef01234567",
         "url": "https://proofos-contract-test.vercel.app",
     }
     if provenance != expected_provenance:
