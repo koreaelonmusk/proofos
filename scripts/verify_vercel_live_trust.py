@@ -190,21 +190,20 @@ def _observe_anonymous_collect_denial(
     except HTTPError as exc:
         payload = _read_json_error(exc)
 
-        if exc.code == 401 and isinstance(payload, dict):
-            if set(payload) != {"detail"}:
-                raise TrustSmokeFailure(
-                    "anonymous denial response contains unexpected public fields"
-                )
-            if payload.get("detail") != "collector caller authentication failed":
-                raise TrustSmokeFailure("anonymous denial reason drifted")
+        if (
+            exc.code == 401
+            and isinstance(payload, dict)
+            and set(payload) == {"detail"}
+            and payload.get("detail") == "collector caller authentication failed"
+        ):
             return {
                 "outcome": "ANONYMOUS_COLLECTION_DENIED",
                 "http_status": 401,
             }
 
-        # Exact ProofOS 401 JSON was handled above. Any remaining 401/403 came
-        # from a layer whose application identity cannot be proven here, so
-        # preserve it as edge protection instead of guessing.
+        # Only the exact ProofOS denial shape above is application evidence.
+        # Any other 401/403, including JSON responses from Vercel Deployment
+        # Protection, is conservatively attributed to the edge.
         if exc.code in PROTECTION_STATUSES:
             return {
                 "outcome": "BLOCKED_BY_DEPLOYMENT_PROTECTION",
