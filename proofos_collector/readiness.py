@@ -4,6 +4,8 @@ from collections.abc import Mapping
 import math
 from urllib.parse import urlsplit
 
+from proofos_collector.env_contract import collector_boundary_issues
+
 
 def configuration_issues(env: Mapping[str, str]) -> tuple[str, ...]:
     issues = []
@@ -29,4 +31,5 @@ def configuration_issues(env: Mapping[str, str]) -> tuple[str, ...]:
         valid_timeout = False
     if not valid_timeout:
         issues.append("observation_timeout_invalid")
+    issues.extend(collector_boundary_issues(env))
     return tuple(issues)

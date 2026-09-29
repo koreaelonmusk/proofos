@@ -23,12 +23,18 @@ import time
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
+from proofos_collector.caller_auth import (
+    CallerAuthenticationError,
+    CallerAuthConfigurationError,
+    verify_google_caller,
+)
 from proofos_collector.readiness import configuration_issues
+from proofos_collector.vercel_wif import fetch_id_token as fetch_vercel_wif_id_token
 
 from proofos.attestation import AttestationSigner, Outcome
 from proofos.keys import FileSigningKeyProvider, write_public_key
@@ -142,6 +148,17 @@ def _identity_token_for(target: str) -> str:
 
     parts = urlsplit(target)
     audience = f"{parts.scheme}://{parts.netloc}"
+
+    # Vercel has no Google metadata server. Exchange its platform-issued,
+    # short-lived OIDC token through Google Workload Identity Federation
+    # instead of accepting a long-lived service-account key file.
+    if os.environ.get("VERCEL"):
+        return fetch_vercel_wif_id_token(
+            audience,
+            env=os.environ,
+            subject_token=os.environ.get("VERCEL_OIDC_TOKEN", ""),
+        )
+
     return google.oauth2.id_token.fetch_id_token(
         google.auth.transport.requests.Request(), audience
     )
@@ -199,8 +216,25 @@ def readyz() -> JSONResponse:
 
 
 @app.post("/v1/collect")
-async def collect(request: CollectRequest) -> dict[str, Any]:
+async def collect(request: CollectRequest, http_request: Request) -> dict[str, Any]:
     """Perform an approved observation and return a signed attestation."""
+    if os.environ.get("VERCEL"):
+        try:
+            verify_google_caller(
+                http_request.headers.get("authorization", ""),
+                env=os.environ,
+            )
+        except CallerAuthConfigurationError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="collector caller authentication is not configured",
+            ) from exc
+        except CallerAuthenticationError as exc:
+            raise HTTPException(
+                status_code=401,
+                detail="collector caller authentication failed",
+            ) from exc
+
     if CLOUD_RUNTIME and READINESS_ISSUES:
         raise HTTPException(
             status_code=503, detail="collector is not configured for live collection"
