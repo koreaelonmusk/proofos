@@ -40,6 +40,13 @@ VERCEL_WIF_CONFIGURATION = frozenset(
     }
 )
 
+VERCEL_CALLER_AUTH_CONFIGURATION = frozenset(
+    {
+        "PROOFOS_COLLECTOR_CALLER_AUDIENCE",
+        "PROOFOS_COLLECTOR_CALLER_SERVICE_ACCOUNT",
+    }
+)
+
 # Vercel exposes VERCEL_OIDC_TOKEN as a system environment variable. It is
 # classified separately so it cannot be confused with a team-managed secret.
 PLATFORM_MANAGED_ENVIRONMENT = frozenset(
@@ -110,6 +117,10 @@ def collector_boundary_issues(env: Mapping[str, str]) -> tuple[str, ...]:
     ):
         issues.append("static_google_credentials_forbidden_on_vercel")
 
+    if _present(env, "VERCEL"):
+        if not all(_present(env, name) for name in VERCEL_CALLER_AUTH_CONFIGURATION):
+            issues.append("vercel_caller_auth_not_configured")
+
     if _present(env, "VERCEL") and _truthy(
         env, "PROOFOS_COLLECTOR_TARGET_REQUIRES_AUTH"
     ):
@@ -130,6 +141,7 @@ def contract_document() -> dict[str, object]:
         "collector_required_live": sorted(COLLECTOR_REQUIRED_LIVE),
         "collector_optional": sorted(COLLECTOR_OPTIONAL),
         "vercel_wif_configuration": sorted(VERCEL_WIF_CONFIGURATION),
+        "vercel_caller_auth_configuration": sorted(VERCEL_CALLER_AUTH_CONFIGURATION),
         "platform_managed_environment": sorted(PLATFORM_MANAGED_ENVIRONMENT),
         "foreign_service_configuration": sorted(FOREIGN_SERVICE_CONFIGURATION),
         "forbidden_model_credentials": sorted(FORBIDDEN_MODEL_CREDENTIALS),
@@ -139,6 +151,7 @@ def contract_document() -> dict[str, object]:
             "vercel_gcp_auth": "short-lived Vercel OIDC -> Google WIF; no service-account key file",
             "collector_scope": "observation and signing only; no model, journal, or verifier capability",
             "runtime_oidc_source": "VERCEL_OIDC_TOKEN platform system environment, never caller configuration",
+            "inbound_caller_auth": "Google-signed OIDC pinned to exact audience and service-account email",
         },
     }
 
@@ -162,6 +175,7 @@ def validate_contract() -> None:
     classified_environment = (
         collector_names
         | VERCEL_WIF_CONFIGURATION
+        | VERCEL_CALLER_AUTH_CONFIGURATION
         | PLATFORM_MANAGED_ENVIRONMENT
         | forbidden_names
     )
