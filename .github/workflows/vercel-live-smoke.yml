@@ -49,6 +49,9 @@ jobs:
             --record-protection-block \
             --expected-git-sha "$GITHUB_SHA"
 
+      - name: Verify persisted smoke evidence independently
+        run: python scripts/verify_live_smoke_artifact.py "artifacts/live-smoke/vercel-${{ github.run_id }}.json"
+
       - name: Upload live smoke evidence
         uses: actions/upload-artifact@v7
         with:
