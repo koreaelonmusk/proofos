@@ -77,6 +77,36 @@ same full workflow source Git SHA. It then derives a pair digest from the two
 constituent evidence hashes. Individually valid artifacts from different
 deployments therefore cannot be presented as one observation set.
 
+## Authenticated E2E gate
+
+`run_authenticated_e2e.py` is the next gate after a sealed
+`READY_FOR_AUTHENTICATED_E2E` launch verdict.
+
+It verifies the health, trust, manifest, and verdict chain **before** it loads the
+collector public key, asks Google for an ID token, or opens a network connection.
+A `HOLD` verdict therefore cannot accidentally exercise signing authority.
+
+The harness must run in a controlled runtime that already carries the same
+Google service identity as the ProofOS API. GitHub Actions does not impersonate
+the collector's authorized API identity. This keeps the production caller
+boundary unchanged.
+
+When authorized, one fresh challenge is collected through the authenticated
+collector path and passed through the existing `AttestationIngestor`. The proof
+requires all of the following:
+
+- the Ed25519 signature and collector scope are accepted;
+- the exact requested profile is bound;
+- a different runtime-issued nonce is rejected;
+- a modified signed field is rejected;
+- the valid attestation becomes exactly one OBSERVED evidence record.
+
+The persisted E2E artifact stores only hashes and bounded metadata. It does not
+store bearer tokens, private keys, the raw nonce, or the raw attestation.
+`verify_authenticated_e2e_artifact.py` independently checks the artifact
+semantics. Even this proof is not production GO: restart durability, durable
+journal replay, and release approval remain separate evidence gates.
+
 ## Explicit live model selection
 
 `PROOFOS_GEMINI_MODEL` selects the model used by all three live ADK roles.
