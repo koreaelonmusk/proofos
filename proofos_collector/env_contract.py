@@ -117,6 +117,8 @@ def collector_boundary_issues(env: Mapping[str, str]) -> tuple[str, ...]:
         # validate only the static federation metadata.
         if not all(_present(env, name) for name in VERCEL_WIF_CONFIGURATION):
             issues.append("vercel_wif_not_configured")
+        if not _present(env, "VERCEL_OIDC_TOKEN"):
+            issues.append("vercel_oidc_token_unavailable")
 
     return tuple(issues)
 
