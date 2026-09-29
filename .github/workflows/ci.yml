@@ -166,11 +166,6 @@ jobs:
           PY
       - name: Validate collector contract in minimal runtime
         run: uv run python -m proofos_collector.env_contract --check
-      - name: Import the Vercel FastAPI entrypoint in minimal runtime
-        run: |
-          uv run python - <<'PY'
-          from proofos_collector.app import app
-          assert app.title == "ProofOS Collector"
-          print(app.title, len(app.routes), "routes")
-          PY
+      - name: Validate the Vercel deploy contract
+        run: uv run python scripts/validate_vercel_deploy.py
 
