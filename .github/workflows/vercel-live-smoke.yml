@@ -1,0 +1,55 @@
+name: Vercel Live Smoke Evidence
+
+on:
+  deployment_status:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      (
+        contains(github.event.deployment_status.environment_url, '.vercel.app') ||
+        contains(github.event.deployment_status.target_url, '.vercel.app')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Resolve deployed Vercel origin
+        id: deployment
+        shell: bash
+        env:
+          ENVIRONMENT_URL: ${{ github.event.deployment_status.environment_url }}
+          TARGET_URL: ${{ github.event.deployment_status.target_url }}
+        run: |
+          url="$ENVIRONMENT_URL"
+          if [[ "$url" != *".vercel.app"* ]]; then
+            url="$TARGET_URL"
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Validate smoke verifier locally
+        run: python scripts/verify_vercel_live_smoke.py --self-test
+
+      - name: Observe live collector
+        env:
+          DEPLOYMENT_URL: ${{ steps.deployment.outputs.url }}
+        run: |
+          python scripts/verify_vercel_live_smoke.py \
+            --url "$DEPLOYMENT_URL" \
+            --output "artifacts/live-smoke/vercel-${{ github.run_id }}.json"
+
+      - name: Upload live smoke evidence
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/live-smoke/vercel-${{ github.run_id }}.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
