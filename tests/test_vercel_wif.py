@@ -82,7 +82,11 @@ class CollectorEnvironmentContractTests(unittest.TestCase):
         }
         base_issues = configuration_issues(base)
         self.assertIn("vercel_wif_not_configured", base_issues)
-        self.assertIn("vercel_oidc_token_unavailable", base_issues)
+        self.assertEqual(
+            base_issues.count("vercel_oidc_token_unavailable"),
+            1,
+            "readiness issue codes must be stable and non-duplicated",
+        )
 
         ready = {
             **base,
