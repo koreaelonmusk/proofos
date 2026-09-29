@@ -41,10 +41,12 @@ jobs:
       - name: Observe live collector
         env:
           DEPLOYMENT_URL: ${{ steps.deployment.outputs.url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           python scripts/verify_vercel_live_smoke.py \
             --url "$DEPLOYMENT_URL" \
-            --output "artifacts/live-smoke/vercel-${{ github.run_id }}.json"
+            --output "artifacts/live-smoke/vercel-${{ github.run_id }}.json" \
+            --record-protection-block
 
       - name: Upload live smoke evidence
         uses: actions/upload-artifact@v7
