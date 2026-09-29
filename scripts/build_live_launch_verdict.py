@@ -211,6 +211,47 @@ def _self_test() -> None:
     )
     assert "automation_bypass_attempted_but_edge_still_blocked" in verdict["reasons"]
 
+    # Reuse the independent pair verifier's accepted schema, but replace the
+    # trust observation with an application-reached READY boundary.
+    health = _health_blocked(origin, sha)
+    health["bypass_attempted"] = True
+    health["evidence_sha256"] = _canonical_hash(
+        {key: value for key, value in health.items() if key != "evidence_sha256"}
+    )
+    trust_unsigned = {
+        "schema_version": 1,
+        "kind": "vercel-live-trust-surface-observation",
+        "observed_at": "2026-09-30T00:00:00+00:00",
+        "observer": "github-actions-http",
+        "target_origin": origin,
+        "workflow_source_git_sha": sha,
+        "bypass_attempted": True,
+        "outcome": "READY_AND_ANONYMOUS_DENIED",
+        "readiness": {
+            "outcome": "READY",
+            "http_status": 200,
+            "observation": {
+                "status": "ready",
+                "service": "proofos-collector",
+                "issues": [],
+            },
+        },
+        "anonymous_collect": {
+            "outcome": "ANONYMOUS_COLLECTION_DENIED",
+            "http_status": 401,
+        },
+        "claim_boundary": [
+            "records whether the live collector configuration is ready or explicitly not ready",
+            "proves anonymous collection is denied only when the application response is reached",
+            "does not prove an authenticated end-to-end collection succeeds",
+            "does not expose signing keys, bearer tokens, WIF tokens, target URLs, or bypass secrets",
+        ],
+    }
+    trust = {**trust_unsigned, "evidence_sha256": _canonical_hash(trust_unsigned)}
+    verdict = derive_verdict(health, trust, expected_git_sha=sha)
+    assert verdict["status"] == READY_FOR_AUTHENTICATED_E2E
+    assert verdict["next_required_evidence"][0] == "authenticated_collection_with_fresh_nonce"
+
     print("live launch verdict self-test OK")
 
 
