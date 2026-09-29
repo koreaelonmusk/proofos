@@ -16,31 +16,35 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: read
-  actions: read
-  id-token: write
+permissions: {}
 
 jobs:
-  authenticated-e2e:
+  authorize:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      authorized: ${{ steps.authorize.outputs.authorized }}
+      target_origin: ${{ steps.authorize.outputs.target_origin }}
+      source_git_sha: ${{ steps.authorize.outputs.source_git_sha }}
+      source_run_id: ${{ steps.authorize.outputs.source_run_id }}
+      manifest_sha256: ${{ steps.authorize.outputs.manifest_sha256 }}
+      verdict_sha256: ${{ steps.authorize.outputs.verdict_sha256 }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      - name: Install minimal collector runtime
+      - name: Install minimal verifier runtime
         run: |
           python -m pip install uv
           uv sync --locked
 
-      - name: Validate E2E harness locally
-        run: |
-          uv run python scripts/verify_authenticated_collection.py --self-test
-          uv run python scripts/verify_authenticated_collection_artifact.py --self-test
-          uv run python scripts/authorize_authenticated_e2e.py --self-test
+      - name: Validate credential-free authorization gate locally
+        run: uv run python scripts/authorize_authenticated_e2e.py --self-test
 
       - name: Verify source evidence workflow identity
         shell: bash
@@ -93,18 +97,81 @@ jobs:
           run-id: ${{ inputs.live_evidence_run_id }}
 
       - name: Authorize privileged authenticated E2E
+        id: authorize
+        shell: bash
         env:
           SOURCE_RUN_ID: ${{ inputs.live_evidence_run_id }}
           DEPLOYMENT_URL: ${{ inputs.deployment_url }}
           EXPECTED_GIT_SHA: ${{ inputs.expected_git_sha }}
         run: |
-          uv run python scripts/authorize_authenticated_e2e.py \
-            "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
-            "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
-            "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
-            "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json" \
-            --expected-git-sha "$EXPECTED_GIT_SHA" \
-            --deployment-url "$DEPLOYMENT_URL"
+          set -euo pipefail
+          result="$(uv run python scripts/authorize_authenticated_e2e.py             "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"             --expected-git-sha "$EXPECTED_GIT_SHA"             --deployment-url "$DEPLOYMENT_URL")"
+          echo "$result"
+          test "$(jq -r '.authorized' <<<"$result")" = "true"
+          echo "authorized=true" >> "$GITHUB_OUTPUT"
+          echo "target_origin=$(jq -r '.target_origin' <<<"$result")" >> "$GITHUB_OUTPUT"
+          echo "source_git_sha=$(jq -r '.workflow_source_git_sha' <<<"$result")" >> "$GITHUB_OUTPUT"
+          echo "source_run_id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "manifest_sha256=$(jq -r '.manifest_sha256' <<<"$result")" >> "$GITHUB_OUTPUT"
+          echo "verdict_sha256=$(jq -r '.verdict_sha256' <<<"$result")" >> "$GITHUB_OUTPUT"
+
+  privileged-e2e:
+    needs: authorize
+    if: needs.authorize.outputs.authorized == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install minimal collector runtime
+        run: |
+          python -m pip install uv
+          uv sync --locked
+
+      - name: Validate authenticated evidence harness locally
+        run: |
+          uv run python scripts/verify_authenticated_collection.py --self-test
+          uv run python scripts/verify_authenticated_collection_artifact.py --self-test
+          uv run python scripts/verify_authenticated_e2e_promotion.py --self-test
+
+      - name: Download authorized health evidence
+        uses: actions/download-artifact@v7
+        with:
+          name: vercel-${{ needs.authorize.outputs.source_run_id }}.json
+          path: artifacts/launch-gate/health
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.authorize.outputs.source_run_id }}
+
+      - name: Download authorized trust evidence
+        uses: actions/download-artifact@v7
+        with:
+          name: vercel-trust-${{ needs.authorize.outputs.source_run_id }}.json
+          path: artifacts/launch-gate/trust
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.authorize.outputs.source_run_id }}
+
+      - name: Download authorized evidence manifest
+        uses: actions/download-artifact@v7
+        with:
+          name: vercel-manifest-${{ needs.authorize.outputs.source_run_id }}.json
+          path: artifacts/launch-gate/manifest
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.authorize.outputs.source_run_id }}
+
+      - name: Download authorized launch verdict
+        uses: actions/download-artifact@v7
+        with:
+          name: vercel-launch-verdict-${{ needs.authorize.outputs.source_run_id }}.json
+          path: artifacts/launch-gate/verdict
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.authorize.outputs.source_run_id }}
 
       - name: Mint short-lived Google caller ID token via GitHub OIDC
         id: google-auth
@@ -113,7 +180,7 @@ jobs:
           workload_identity_provider: ${{ secrets.PROOFOS_E2E_GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.PROOFOS_E2E_GCP_SERVICE_ACCOUNT }}
           token_format: id_token
-          id_token_audience: ${{ inputs.deployment_url }}
+          id_token_audience: ${{ needs.authorize.outputs.target_origin }}
           id_token_include_email: true
           create_credentials_file: false
           export_environment_variables: false
@@ -123,28 +190,40 @@ jobs:
           PROOFOS_E2E_CALLER_ID_TOKEN: ${{ steps.google-auth.outputs.id_token }}
           PROOFOS_E2E_COLLECTOR_PUBLIC_KEY: ${{ secrets.PROOFOS_E2E_COLLECTOR_PUBLIC_KEY }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-          DEPLOYMENT_URL: ${{ inputs.deployment_url }}
-          EXPECTED_GIT_SHA: ${{ inputs.expected_git_sha }}
+          DEPLOYMENT_URL: ${{ needs.authorize.outputs.target_origin }}
+          EXPECTED_GIT_SHA: ${{ needs.authorize.outputs.source_git_sha }}
         run: |
-          uv run python scripts/verify_authenticated_collection.py \
-            --url "$DEPLOYMENT_URL" \
-            --expected-git-sha "$EXPECTED_GIT_SHA" \
-            --output "artifacts/authenticated-e2e/collection-${{ github.run_id }}.json"
+          uv run python scripts/verify_authenticated_collection.py             --url "$DEPLOYMENT_URL"             --expected-git-sha "$EXPECTED_GIT_SHA"             --output "artifacts/authenticated-e2e/collection-${{ github.run_id }}.json"
 
       - name: Independently verify persisted authenticated evidence
         env:
           PROOFOS_E2E_COLLECTOR_PUBLIC_KEY: ${{ secrets.PROOFOS_E2E_COLLECTOR_PUBLIC_KEY }}
-          EXPECTED_GIT_SHA: ${{ inputs.expected_git_sha }}
+          EXPECTED_GIT_SHA: ${{ needs.authorize.outputs.source_git_sha }}
         run: |
-          uv run python scripts/verify_authenticated_collection_artifact.py \
-            "artifacts/authenticated-e2e/collection-${{ github.run_id }}.json" \
-            --expected-git-sha "$EXPECTED_GIT_SHA"
+          uv run python scripts/verify_authenticated_collection_artifact.py             "artifacts/authenticated-e2e/collection-${{ github.run_id }}.json"             --expected-git-sha "$EXPECTED_GIT_SHA"
 
-      - name: Upload authenticated E2E evidence
+      - name: Cross-check authenticated evidence against sealed launch bundle
+        env:
+          PROOFOS_E2E_COLLECTOR_PUBLIC_KEY: ${{ secrets.PROOFOS_E2E_COLLECTOR_PUBLIC_KEY }}
+          SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
+          EXPECTED_GIT_SHA: ${{ needs.authorize.outputs.source_git_sha }}
+        run: |
+          uv run python scripts/verify_authenticated_e2e_promotion.py             "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"             "artifacts/authenticated-e2e/collection-${{ github.run_id }}.json"             --expected-git-sha "$EXPECTED_GIT_SHA"             --output "artifacts/authenticated-e2e/promotion-${{ github.run_id }}.json"
+
+      - name: Upload authenticated collection evidence
         uses: actions/upload-artifact@v7
         with:
           name: proofos-authenticated-e2e-${{ github.run_id }}
           path: artifacts/authenticated-e2e/collection-${{ github.run_id }}.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload authenticated promotion evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: proofos-authenticated-promotion-${{ github.run_id }}
+          path: artifacts/authenticated-e2e/promotion-${{ github.run_id }}.json
           archive: false
           if-no-files-found: error
           retention-days: 30
