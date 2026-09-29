@@ -110,6 +110,23 @@ class VercelWorkloadIdentityTests(unittest.TestCase):
                 SERVICE_ACCOUNT_ENV: "not-an-email",
             })
 
+    def test_id_token_audience_must_be_exact_https_origin(self):
+        from proofos_collector.vercel_wif import WifConfigurationError, _validated_target_audience
+
+        self.assertEqual(_validated_target_audience(TARGET), TARGET)
+        self.assertEqual(_validated_target_audience(TARGET + "/"), TARGET)
+
+        for invalid in (
+            TARGET + "/health",
+            TARGET + "?debug=1",
+            TARGET + "#fragment",
+            "http://proofos-api.example.com",
+            "https://user:pass@proofos-api.example.com",
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(WifConfigurationError):
+                    _validated_target_audience(invalid)
+
     def test_missing_runtime_oidc_token_fails_before_network(self):
         from proofos_collector.vercel_wif import WifConfigurationError
 
