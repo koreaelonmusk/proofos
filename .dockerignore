@@ -6,3 +6,6 @@ __pycache__/
 *.pyc
 .env
 .venv/
+
+# Never ship google-github-actions/auth generated credentials
+gha-creds-*.json

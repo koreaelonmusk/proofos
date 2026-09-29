@@ -221,3 +221,7 @@ __marimo__/
 secrets/
 *.pem
 *.key
+
+# google-github-actions/auth generated credentials
+# Kept ignored even though authenticated E2E uses create_credentials_file: false.
+gha-creds-*.json

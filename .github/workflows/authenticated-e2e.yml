@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   authenticated-e2e:
@@ -27,6 +28,18 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Mint short-lived Google caller ID token via GitHub OIDC
+        id: google-auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.PROOFOS_E2E_GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.PROOFOS_E2E_GCP_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ inputs.deployment_url }}
+          id_token_include_email: true
+          create_credentials_file: false
+          export_environment_variables: false
+
       - name: Install minimal collector runtime
         run: |
           python -m pip install uv
@@ -39,7 +52,7 @@ jobs:
 
       - name: Collect fresh authenticated signed evidence
         env:
-          PROOFOS_E2E_CALLER_ID_TOKEN: ${{ secrets.PROOFOS_E2E_CALLER_ID_TOKEN }}
+          PROOFOS_E2E_CALLER_ID_TOKEN: ${{ steps.google-auth.outputs.id_token }}
           PROOFOS_E2E_COLLECTOR_PUBLIC_KEY: ${{ secrets.PROOFOS_E2E_COLLECTOR_PUBLIC_KEY }}
           DEPLOYMENT_URL: ${{ inputs.deployment_url }}
           EXPECTED_GIT_SHA: ${{ inputs.expected_git_sha }}

@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import sys
-import time
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -212,12 +211,19 @@ def verify_evidence(
             "attestation binding mismatch: " + ",".join(failed)
         )
 
-    now = time.time()
-    age = now - attestation.observed_at
-    if age < -30:
-        raise AuthenticatedEvidenceVerificationError("attestation is future-dated")
-    if age > MAX_ATTESTATION_AGE_SECONDS:
-        raise AuthenticatedEvidenceVerificationError("attestation is stale")
+    captured_at = evidence.get("observed_at")
+    if isinstance(captured_at, bool) or not isinstance(captured_at, (int, float)):
+        raise AuthenticatedEvidenceVerificationError("observed_at must be a number")
+    captured_at = float(captured_at)
+    capture_age = captured_at - attestation.observed_at
+    if capture_age < -30:
+        raise AuthenticatedEvidenceVerificationError(
+            "attestation is future-dated relative to evidence capture"
+        )
+    if capture_age > MAX_ATTESTATION_AGE_SECONDS:
+        raise AuthenticatedEvidenceVerificationError(
+            "attestation was stale when evidence was captured"
+        )
 
     tamper = _tamper_rejection(attestation, verifier)
     expected_checks = {
@@ -265,13 +271,14 @@ def _self_test() -> None:
         execution_id = "e2e-self-test"
         task_id = "E2E-SELF-TEST"
         nonce = "fresh-self-test-nonce"
+        capture_time = 1_800_000_000.0
         attestation = signer.sign(
             execution_id=execution_id,
             task_id=task_id,
             kind=EVIDENCE_KIND,
             profile_id=PROFILE_ID,
             request_nonce=nonce,
-            observed_at=time.time(),
+            observed_at=capture_time - 2.0,
             outcome=Outcome.HEALTHY,
             status_code=200,
             response_digest_value="d" * 64,
@@ -280,7 +287,7 @@ def _self_test() -> None:
         unsigned = {
             "schema_version": SCHEMA_VERSION,
             "kind": KIND,
-            "observed_at": time.time(),
+            "observed_at": capture_time,
             "target_origin": "https://proofos-preview.vercel.app",
             "workflow_source_git_sha": "0123456789abcdef0123456789abcdef01234567",
             "outcome": "SIGNED_ATTESTATION_VERIFIED",
@@ -316,6 +323,69 @@ def _self_test() -> None:
             evidence,
             expected_git_sha="0123456789abcdef0123456789abcdef01234567",
         )["valid"]
+
+        # Persisted artifacts remain verifiable long after capture because
+        # freshness is evaluated against the immutable capture timestamp,
+        # not the verifier's current wall clock.
+        historical_attestation = signer.sign(
+            execution_id=execution_id,
+            task_id=task_id,
+            kind=EVIDENCE_KIND,
+            profile_id=PROFILE_ID,
+            request_nonce=nonce,
+            observed_at=1_699_999_998.0,
+            outcome=Outcome.HEALTHY,
+            status_code=200,
+            response_digest_value="d" * 64,
+            detail="HEALTHY via runtime-health-v1",
+        )
+        historical = json.loads(json.dumps(evidence))
+        historical["observed_at"] = 1_700_000_000.0
+        historical["attestation"] = historical_attestation.to_dict()
+        historical_unsigned = {
+            key: value for key, value in historical.items() if key != "evidence_sha256"
+        }
+        historical["evidence_sha256"] = hashlib.sha256(
+            json.dumps(
+                historical_unsigned,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        assert verify_evidence(historical)["valid"]
+
+        stale_attestation = signer.sign(
+            execution_id=execution_id,
+            task_id=task_id,
+            kind=EVIDENCE_KIND,
+            profile_id=PROFILE_ID,
+            request_nonce=nonce,
+            observed_at=capture_time - 1000.0,
+            outcome=Outcome.HEALTHY,
+            status_code=200,
+            response_digest_value="d" * 64,
+            detail="HEALTHY via runtime-health-v1",
+        )
+        stale_at_capture = json.loads(json.dumps(evidence))
+        stale_at_capture["attestation"] = stale_attestation.to_dict()
+        stale_unsigned = {
+            key: value
+            for key, value in stale_at_capture.items()
+            if key != "evidence_sha256"
+        }
+        stale_at_capture["evidence_sha256"] = hashlib.sha256(
+            json.dumps(
+                stale_unsigned,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        try:
+            verify_evidence(stale_at_capture)
+        except AuthenticatedEvidenceVerificationError:
+            pass
+        else:
+            raise AssertionError("attestation stale at capture was accepted")
 
         tampered = json.loads(json.dumps(evidence))
         tampered["attestation"]["request_nonce"] = "forged"
