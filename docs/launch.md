@@ -60,6 +60,9 @@ The trust evidence distinguishes three states instead of collapsing them:
 - `CONFIG_NOT_READY_AND_ANONYMOUS_DENIED`: readiness returned HTTP 503 with
   stable issue codes, while anonymous collection was still denied before probe
   or signing authority.
+- `READINESS_BLOCKED_AND_ANONYMOUS_DENIED`: readiness could not be observed
+  through the Vercel edge, but the application-level anonymous collection denial
+  was reached and proved.
 - `BLOCKED_BY_DEPLOYMENT_PROTECTION`: the Vercel edge blocked both probes, so
   application readiness and caller-auth behavior were not observed.
 
