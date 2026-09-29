@@ -1,0 +1,68 @@
+name: Authenticated E2E Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_url:
+        description: "Exact protected Vercel deployment origin (https://*.vercel.app)"
+        required: true
+        type: string
+      expected_git_sha:
+        description: "Full 40-character Git SHA expected at the target deployment"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  authenticated-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.expected_git_sha }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install minimal collector runtime
+        run: |
+          python -m pip install uv
+          uv sync --locked
+
+      - name: Validate E2E harness locally
+        run: |
+          uv run python scripts/verify_authenticated_collection.py --self-test
+          uv run python scripts/verify_authenticated_collection_artifact.py --self-test
+
+      - name: Collect fresh authenticated signed evidence
+        env:
+          PROOFOS_E2E_CALLER_ID_TOKEN: ${{ secrets.PROOFOS_E2E_CALLER_ID_TOKEN }}
+          PROOFOS_E2E_COLLECTOR_PUBLIC_KEY: ${{ secrets.PROOFOS_E2E_COLLECTOR_PUBLIC_KEY }}
+          DEPLOYMENT_URL: ${{ inputs.deployment_url }}
+          EXPECTED_GIT_SHA: ${{ inputs.expected_git_sha }}
+        run: |
+          uv run python scripts/verify_authenticated_collection.py \
+            --url "$DEPLOYMENT_URL" \
+            --expected-git-sha "$EXPECTED_GIT_SHA" \
+            --output "artifacts/authenticated-e2e/collection-${{ github.run_id }}.json"
+
+      - name: Independently verify persisted authenticated evidence
+        env:
+          PROOFOS_E2E_COLLECTOR_PUBLIC_KEY: ${{ secrets.PROOFOS_E2E_COLLECTOR_PUBLIC_KEY }}
+          EXPECTED_GIT_SHA: ${{ inputs.expected_git_sha }}
+        run: |
+          uv run python scripts/verify_authenticated_collection_artifact.py \
+            "artifacts/authenticated-e2e/collection-${{ github.run_id }}.json" \
+            --expected-git-sha "$EXPECTED_GIT_SHA"
+
+      - name: Upload authenticated E2E evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: proofos-authenticated-e2e-${{ github.run_id }}
+          path: artifacts/authenticated-e2e/collection-${{ github.run_id }}.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
