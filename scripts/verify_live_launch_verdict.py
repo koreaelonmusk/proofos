@@ -116,19 +116,87 @@ def verify_verdict(verdict: Any) -> dict[str, Any]:
     trust_outcome = verdict.get("trust_outcome")
     reasons = verdict["reasons"]
     next_required = verdict["next_required_evidence"]
+    readiness_issues = verdict["readiness_issues"]
+    bypass_attempted = verdict["bypass_attempted"]
 
-    if status == "READY_FOR_AUTHENTICATED_E2E":
-        if trust_outcome != "READY_AND_ANONYMOUS_DENIED":
-            raise VerdictVerificationError("ready verdict lacks required trust outcome")
-        if verdict["readiness_issues"]:
+    expected_status: str
+    expected_reasons: list[str]
+    expected_next: list[str]
+
+    if trust_outcome == "BLOCKED_BY_DEPLOYMENT_PROTECTION":
+        expected_status = "HOLD"
+        expected_reasons = ["deployment_protection_blocked_application_observation"]
+        if bypass_attempted:
+            expected_reasons.append("automation_bypass_attempted_but_edge_still_blocked")
+            expected_next = [
+                "repair_vercel_automation_bypass",
+                "rerun_live_trust_observation",
+            ]
+        else:
+            expected_reasons.append("automation_bypass_not_configured_for_workflow")
+            expected_next = [
+                "configure_vercel_automation_bypass",
+                "rerun_live_trust_observation",
+            ]
+        if readiness_issues:
+            raise VerdictVerificationError(
+                "edge-blocked verdict cannot claim application readiness issues"
+            )
+    elif trust_outcome == "READINESS_BLOCKED_AND_ANONYMOUS_DENIED":
+        expected_status = "HOLD"
+        expected_reasons = [
+            "application_caller_auth_observed",
+            "readiness_not_observed_through_deployment_edge",
+        ]
+        expected_next = [
+            "observe_application_readiness",
+            "rerun_live_trust_observation",
+        ]
+        if readiness_issues:
+            raise VerdictVerificationError(
+                "readiness-blocked verdict cannot claim unobserved readiness issues"
+            )
+    elif trust_outcome == "CONFIG_NOT_READY_AND_ANONYMOUS_DENIED":
+        expected_status = "HOLD"
+        if not readiness_issues:
+            raise VerdictVerificationError(
+                "configuration-not-ready verdict must carry readiness issues"
+            )
+        expected_reasons = ["collector_configuration_not_ready"]
+        expected_reasons.extend(f"readiness:{issue}" for issue in readiness_issues)
+        expected_next = [
+            "resolve_collector_readiness_issues",
+            "rerun_live_trust_observation",
+        ]
+    elif trust_outcome == "READY_AND_ANONYMOUS_DENIED":
+        expected_status = "READY_FOR_AUTHENTICATED_E2E"
+        if readiness_issues:
             raise VerdictVerificationError("ready verdict cannot carry readiness issues")
-        if "authenticated_collection_with_fresh_nonce" not in next_required:
-            raise VerdictVerificationError("ready verdict skipped authenticated E2E gate")
+        expected_reasons = [
+            "collector_readiness_observed",
+            "anonymous_collection_denial_observed",
+            "authenticated_end_to_end_collection_not_yet_proven",
+        ]
+        expected_next = [
+            "authenticated_collection_with_fresh_nonce",
+            "signed_attestation_verification",
+            "tamper_nonce_and_profile_rejection",
+        ]
     else:
-        if trust_outcome == "READY_AND_ANONYMOUS_DENIED":
-            raise VerdictVerificationError("HOLD contradicts fully observed readiness boundary")
-        if not next_required:
-            raise VerdictVerificationError("HOLD must name the next required evidence")
+        raise VerdictVerificationError("unsupported trust outcome")
+
+    if status != expected_status:
+        raise VerdictVerificationError(
+            "verdict status does not match independently derived trust state"
+        )
+    if reasons != expected_reasons:
+        raise VerdictVerificationError(
+            "verdict reasons do not match independently derived trust state"
+        )
+    if next_required != expected_next:
+        raise VerdictVerificationError(
+            "next required evidence does not match independently derived trust state"
+        )
 
     if not any("not production GO" in item for item in verdict["claim_boundary"]):
         raise VerdictVerificationError("claim boundary does not prevent production overclaim")
@@ -190,6 +258,36 @@ def _self_test() -> None:
         pass
     else:
         raise AssertionError("tampered launch verdict was accepted")
+
+    semantic_forgery = json.loads(json.dumps(unsigned))
+    semantic_forgery["reasons"] = ["looks_green_but_is_not_proven"]
+    semantic_forgery["verdict_sha256"] = hashlib.sha256(
+        json.dumps(
+            semantic_forgery,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    # Recompute over the unsigned body correctly so this test proves the
+    # verifier rejects bad semantics even when the attacker can re-hash JSON.
+    semantic_unsigned = {
+        key: value
+        for key, value in semantic_forgery.items()
+        if key != "verdict_sha256"
+    }
+    semantic_forgery["verdict_sha256"] = hashlib.sha256(
+        json.dumps(
+            semantic_unsigned,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    try:
+        verify_verdict(semantic_forgery)
+    except VerdictVerificationError:
+        pass
+    else:
+        raise AssertionError("re-hashed semantic forgery was accepted")
 
     print("live launch verdict verifier self-test OK")
 
