@@ -113,10 +113,12 @@ def collector_boundary_issues(env: Mapping[str, str]) -> tuple[str, ...]:
     if _present(env, "VERCEL") and _truthy(
         env, "PROOFOS_COLLECTOR_TARGET_REQUIRES_AUTH"
     ):
+        # At Vercel function runtime the OIDC token arrives on the
+        # x-vercel-oidc-token request header, not process.env. Readiness can
+        # validate only the static federation metadata here.
         required = (
             "PROOFOS_GCP_WIF_PROVIDER",
             "PROOFOS_GCP_WIF_SERVICE_ACCOUNT",
-            "VERCEL_OIDC_TOKEN",
         )
         if not all(_present(env, name) for name in required):
             issues.append("vercel_wif_not_configured")
