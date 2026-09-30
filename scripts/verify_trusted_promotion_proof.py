@@ -26,6 +26,7 @@ EXPECTED_KEYS = {
     "github_deployment_id",
     "github_deployment_status_id",
     "deployment_environment",
+    "source_run_id",
     "manifest_sha256",
     "verdict_sha256",
     "trusted_source_evidence_sha256",
@@ -59,6 +60,7 @@ def verify_promotion(
     promotion: Any,
     *,
     expected_git_sha: str = "",
+    expected_source_run_id: int = 0,
 ) -> dict[str, Any]:
     if not isinstance(promotion, dict) or set(promotion) != EXPECTED_KEYS:
         raise TrustedPromotionVerificationError("promotion proof schema drifted")
@@ -66,6 +68,18 @@ def verify_promotion(
         raise TrustedPromotionVerificationError("unsupported promotion schema")
     if promotion.get("kind") != KIND or promotion.get("status") != STATUS:
         raise TrustedPromotionVerificationError("promotion proof identity is invalid")
+    if (
+        not isinstance(expected_source_run_id, int)
+        or isinstance(expected_source_run_id, bool)
+        or expected_source_run_id <= 0
+    ):
+        raise TrustedPromotionVerificationError(
+            "expected source run id must be a positive integer"
+        )
+    if promotion.get("source_run_id") != expected_source_run_id:
+        raise TrustedPromotionVerificationError(
+            "promotion proof is bound to a different source run"
+        )
     digest = promotion.get("promotion_sha256")
     if (
         not isinstance(digest, str)
@@ -84,6 +98,7 @@ def verify_promotion(
             verdict,
             trusted_source,
             expected_git_sha=expected_git_sha,
+            source_run_id=expected_source_run_id,
         )
     except TrustedPromotionError as exc:
         raise TrustedPromotionVerificationError(
@@ -98,6 +113,7 @@ def verify_promotion(
         "status": promotion["status"],
         "target_origin": promotion["target_origin"],
         "workflow_source_git_sha": promotion["workflow_source_git_sha"],
+        "source_run_id": promotion["source_run_id"],
         "promotion_sha256": digest.lower(),
         "verdict_sha256": promotion["verdict_sha256"],
         "trusted_source_evidence_sha256": promotion[
@@ -133,6 +149,7 @@ def main() -> int:
     parser.add_argument("trusted_source", nargs="?", type=Path)
     parser.add_argument("promotion", nargs="?", type=Path)
     parser.add_argument("--expected-git-sha", default="")
+    parser.add_argument("--source-run-id", type=int, default=0)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
@@ -160,6 +177,7 @@ def main() -> int:
             _load(args.trusted_source),
             _load(args.promotion),
             expected_git_sha=args.expected_git_sha,
+            expected_source_run_id=args.source_run_id,
         )
     except TrustedPromotionVerificationError as exc:
         print(f"trusted promotion proof INVALID: {exc}", file=sys.stderr)
