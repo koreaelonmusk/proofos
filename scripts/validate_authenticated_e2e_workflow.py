@@ -87,10 +87,8 @@ def validate() -> list[str]:
         "test \"$(gh api \"$api\" --jq '.head_branch')\" = \"main\"",
 
         "Verify source evidence workflow identity",
-        "Download sealed health evidence",
-        "Download sealed trust evidence",
-        "Download sealed evidence manifest",
-        "Download sealed launch verdict",
+        "Download sealed launch bundle with bounded retry",
+        "uv run python scripts/download_run_artifact.py",
         "- name: Authorize privileged authenticated E2E",
         "uv run python scripts/authorize_authenticated_e2e.py",
         "authorized: ${{ steps.authorize.outputs.authorized }}",
@@ -106,6 +104,13 @@ def validate() -> list[str]:
         if snippet not in privileged:
             issues.append("privileged_job_missing:" + snippet)
 
+    for snippet in (
+        "Download authorized launch bundle with bounded retry",
+        "uv run python scripts/download_run_artifact.py",
+    ):
+        if snippet not in privileged:
+            issues.append("privileged_job_missing:" + snippet)
+
     if text.count("id-token: write") != 1:
         issues.append("oidc_permission_must_exist_exactly_once")
     if text.count("uses: google-github-actions/auth@v3") != 1:
@@ -117,7 +122,7 @@ def validate() -> list[str]:
 
     gate = authorize.find("- name: Authorize privileged authenticated E2E")
     source = authorize.find("Verify source evidence workflow identity")
-    download = authorize.find("Download sealed health evidence")
+    download = authorize.find("Download sealed launch bundle with bounded retry")
     if min(gate, source, download) < 0 or not (source < download < gate):
         issues.append("source_identity_and_bundle_must_precede_authorization")
 
