@@ -1,9 +1,10 @@
 """Authorize the privileged authenticated-E2E step from sealed launch evidence.
 
 This module is deliberately credential-free. It independently verifies the
-health, trust, manifest, and launch-verdict artifacts and refuses to authorize
-the next step unless the verdict is exactly READY_FOR_AUTHENTICATED_E2E and is
-bound to the requested Git SHA and deployment origin.
+health, trust, manifest, and launch-verdict artifacts. Direct public READY may
+authorize the next evidence step. A public HOLD may authorize only when an
+independently verified Trusted Promotion Proof binds the same origin, Git SHA,
+deployment event, public verdict, and Trusted Source evidence.
 """
 
 from __future__ import annotations
@@ -16,8 +17,13 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from verify_live_launch_verdict import VerdictVerificationError, verify_verdict
+from verify_trusted_promotion_proof import (
+    TrustedPromotionVerificationError,
+    verify_promotion as verify_trusted_promotion,
+)
 
 READY = "READY_FOR_AUTHENTICATED_E2E"
+TRUSTED_PROMOTED = "AUTHORIZED_FOR_AUTHENTICATED_E2E"
 
 
 class E2EAuthorizationError(RuntimeError):
@@ -51,6 +57,8 @@ def authorize(
     *,
     expected_git_sha: str,
     deployment_url: str,
+    trusted_source: Any | None = None,
+    trusted_promotion: Any | None = None,
 ) -> dict[str, Any]:
     try:
         verified = verify_verdict(
@@ -74,10 +82,47 @@ def authorize(
         )
 
     authorized = verified["status"] == READY
+    status = verified["status"]
+    authorization_basis = "public_launch_verdict" if authorized else "none"
+    promotion_sha256 = None
+
+    if not authorized and (trusted_source is not None or trusted_promotion is not None):
+        if trusted_source is None or trusted_promotion is None:
+            raise E2EAuthorizationError(
+                "trusted source and trusted promotion proof must be supplied together"
+            )
+        try:
+            promoted = verify_trusted_promotion(
+                health,
+                trust,
+                manifest,
+                verdict,
+                trusted_source,
+                trusted_promotion,
+                expected_git_sha=expected_git_sha,
+            )
+        except TrustedPromotionVerificationError as exc:
+            raise E2EAuthorizationError(
+                f"trusted promotion proof is invalid: {exc}"
+            ) from exc
+        if promoted["target_origin"] != verified["target_origin"]:
+            raise E2EAuthorizationError(
+                "trusted promotion targets a different deployment origin"
+            )
+        if promoted["workflow_source_git_sha"] != verified["workflow_source_git_sha"]:
+            raise E2EAuthorizationError(
+                "trusted promotion binds to a different Git SHA"
+            )
+        authorized = promoted["status"] == TRUSTED_PROMOTED
+        status = promoted["status"]
+        authorization_basis = "trusted_promotion_proof"
+        promotion_sha256 = promoted["promotion_sha256"]
 
     return {
         "authorized": authorized,
-        "status": verified["status"],
+        "status": status,
+        "authorization_basis": authorization_basis,
+        "trusted_promotion_sha256": promotion_sha256,
         "target_origin": verified["target_origin"],
         "workflow_source_git_sha": verified["workflow_source_git_sha"],
         "github_deployment_id": verified["github_deployment_id"],
@@ -120,6 +165,7 @@ def _self_test() -> None:
     )
     assert hold["authorized"] is False
     assert hold["status"] == "HOLD"
+    assert hold["authorization_basis"] == "none"
 
     ready_health = _observed_health(origin, sha)
     ready_trust = _ready_trust(origin, sha)
@@ -140,6 +186,7 @@ def _self_test() -> None:
     )
     assert result["authorized"] is True
     assert result["status"] == READY
+    assert result["authorization_basis"] == "public_launch_verdict"
 
     automatic = authorize(
         ready_health,
@@ -184,6 +231,8 @@ def main() -> int:
     parser.add_argument("trust", nargs="?", type=Path)
     parser.add_argument("manifest", nargs="?", type=Path)
     parser.add_argument("verdict", nargs="?", type=Path)
+    parser.add_argument("--trusted-source", type=Path)
+    parser.add_argument("--trusted-promotion", type=Path)
     parser.add_argument("--expected-git-sha", default="")
     parser.add_argument("--deployment-url", default="")
     parser.add_argument("--self-test", action="store_true")
@@ -208,6 +257,14 @@ def main() -> int:
             _load(args.verdict),
             expected_git_sha=args.expected_git_sha,
             deployment_url=args.deployment_url,
+            trusted_source=(
+                _load(args.trusted_source) if args.trusted_source is not None else None
+            ),
+            trusted_promotion=(
+                _load(args.trusted_promotion)
+                if args.trusted_promotion is not None
+                else None
+            ),
         )
     except E2EAuthorizationError as exc:
         print(f"authenticated E2E AUTHORIZATION INVALID: {exc}", file=sys.stderr)
