@@ -280,6 +280,8 @@ jobs:
           fi
           result="$(uv run python scripts/authorize_authenticated_e2e.py "${args[@]}")"
           echo "$result"
+          mkdir -p artifacts/trust-pipeline
+          printf '%s\n' "$result" > "artifacts/trust-pipeline/authorization-$GITHUB_RUN_ID.json"
           authorized="$(jq -r '.authorized' <<<"$result")"
           [[ "$authorized" == "true" || "$authorized" == "false" ]] || {
             echo "invalid authorization result"; exit 1;
@@ -292,6 +294,56 @@ jobs:
           echo "verdict_sha256=$(jq -r '.verdict_sha256' <<<"$result")" >> "$GITHUB_OUTPUT"
           echo "authorization_basis=$(jq -r '.authorization_basis' <<<"$result")" >> "$GITHUB_OUTPUT"
           echo "trusted_promotion_sha256=$(jq -r '.trusted_promotion_sha256 // ""' <<<"$result")" >> "$GITHUB_OUTPUT"
+
+      - name: Build and independently verify Trust Pipeline Receipt
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          FOLLOWUP_RUN_ID: ${{ steps.source.outputs.followup_run_id }}
+        run: |
+          set -euo pipefail
+          args=(
+            "artifacts/trust-pipeline/authorization-$GITHUB_RUN_ID.json"
+            --source-run-id "$SOURCE_RUN_ID"
+            --e2e-run-id "$GITHUB_RUN_ID"
+            --output "artifacts/trust-pipeline/receipt-$GITHUB_RUN_ID.json"
+          )
+          verify_args=(
+            "artifacts/trust-pipeline/authorization-$GITHUB_RUN_ID.json"
+            "artifacts/trust-pipeline/receipt-$GITHUB_RUN_ID.json"
+          )
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            [[ "$FOLLOWUP_RUN_ID" =~ ^[0-9]+$ ]] || {
+              echo "automatic receipt requires follow-up run ID"; exit 1;
+            }
+            diagnosis="artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json"
+            args+=(
+              --followup-run-id "$FOLLOWUP_RUN_ID"
+              --provider-diagnosis "$diagnosis"
+            )
+            verify_args+=(--provider-diagnosis "$diagnosis")
+          fi
+          uv run python scripts/build_trust_pipeline_receipt.py "${args[@]}"
+          uv run python scripts/verify_trust_pipeline_receipt.py "${verify_args[@]}"
+
+      - name: Upload Trust Pipeline authorization decision
+        uses: actions/upload-artifact@v7
+        with:
+          name: proofos-trust-authorization-${{ github.run_id }}.json
+          path: artifacts/trust-pipeline/authorization-${{ github.run_id }}.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Trust Pipeline Receipt
+        uses: actions/upload-artifact@v7
+        with:
+          name: proofos-trust-pipeline-receipt-${{ github.run_id }}.json
+          path: artifacts/trust-pipeline/receipt-${{ github.run_id }}.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
 
   privileged-e2e:
     needs: authorize
