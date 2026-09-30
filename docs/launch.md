@@ -143,6 +143,14 @@ The diagnostic records one of:
 The public smoke job has no `id-token: write`. The trusted OIDC authority is
 isolated to this diagnostic job and is not reused as Google Cloud identity.
 
+For rejected Trusted Sources requests, the diagnostic may also persist a strict
+non-secret projection of the GitHub OIDC payload: `iss`, `aud`, `sub`,
+repository identifiers, `ref`, workflow identity, event name, and runner type.
+The JWT signature and raw token are never persisted, and the projection is
+diagnostic only. It is not used as authorization input. The independent artifact
+verifier requires the GitHub Actions issuer, the ProofOS repository, and the
+default repository-owner audience before accepting the projection.
+
 ### Automatic authenticated-E2E promotion
 
 The workflow also subscribes to completed `Vercel Live Smoke Evidence` runs.
