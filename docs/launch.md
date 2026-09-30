@@ -102,9 +102,19 @@ short-lived service-account ID token. Stored caller bearer-token secrets and
 service-account JSON keys remain forbidden. The ID-token audience comes from the
 verified authorization output, not directly from the workflow-dispatch input.
 
-When Deployment Protection is enabled, `VERCEL_AUTOMATION_BYPASS_SECRET` is
-used only as the official edge-bypass request header after the launch gate. It is
-never passed on the command line or persisted in authenticated evidence.
+The two identities are intentionally non-substitutable: GitHub OIDC grants only
+the right to cross the Vercel Deployment Protection boundary, while the Google
+ID token grants only the configured ProofOS application caller identity. Possession
+of either token alone is insufficient for a successful authenticated collection.
+
+When Deployment Protection is enabled, authenticated E2E uses two independent
+short-lived identities instead of a static bypass secret. The privileged job
+mints a GitHub Actions OIDC token and sends it only as Vercel's
+`x-vercel-trusted-oidc-idp-token` edge-authentication header. Separately,
+Google Workload Identity Federation mints the ProofOS caller ID token used in the
+`Authorization: Bearer` header. The authenticated-E2E workflow contract forbids
+`VERCEL_AUTOMATION_BYPASS_SECRET` and `x-vercel-protection-bypass` entirely.
+Neither short-lived token is passed on the command line or persisted in evidence.
 
 The workflow always checks out the current trusted verifier implementation.
 `expected_git_sha` identifies the deployment under test and is verified against

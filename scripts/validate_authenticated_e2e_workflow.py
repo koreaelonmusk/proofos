@@ -30,13 +30,18 @@ PRIVILEGED_REQUIRED = (
     "create_credentials_file: false",
     "export_environment_variables: false",
     "PROOFOS_E2E_CALLER_ID_TOKEN: ${{ steps.google-auth.outputs.id_token }}",
-    "VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}",
+    "VERCEL_TRUSTED_OIDC_TOKEN: ${{ steps.vercel-oidc.outputs.token }}",
+    "uses: actions/github-script@v7",
+    "const token = await core.getIDToken();",
+    "core.setSecret(token);",
     "verify_authenticated_e2e_promotion.py",
 )
 FORBIDDEN_GLOBAL = (
     "secrets.PROOFOS_E2E_CALLER_ID_TOKEN",
     "credentials_json:",
     "GOOGLE_APPLICATION_CREDENTIALS",
+    "VERCEL_AUTOMATION_BYPASS_SECRET",
+    "x-vercel-protection-bypass",
     "ref: ${{ inputs.expected_git_sha }}",
 )
 
@@ -126,11 +131,14 @@ def validate() -> list[str]:
     if min(gate, source, download) < 0 or not (source < download < gate):
         issues.append("source_identity_and_bundle_must_precede_authorization")
 
+    edge_oidc = privileged.find("- name: Mint short-lived Vercel Trusted Source identity")
     auth = privileged.find("uses: google-github-actions/auth@v3")
     collect = privileged.find("- name: Collect fresh authenticated signed evidence")
     promotion = privileged.find("- name: Cross-check authenticated evidence against sealed launch bundle")
-    if min(auth, collect, promotion) < 0 or not (auth < collect < promotion):
-        issues.append("oidc_then_collection_then_promotion_order_required")
+    if min(edge_oidc, auth, collect, promotion) < 0 or not (
+        edge_oidc < auth < collect < promotion
+    ):
+        issues.append("edge_oidc_then_google_oidc_then_collection_then_promotion_order_required")
 
     return issues
 
@@ -147,8 +155,9 @@ def main() -> int:
     print("- authorization job: no secrets, no OIDC permission")
     print("- sealed source run and evidence bundle: verified before authorization")
     print("- privileged job: created only after READY authorization")
-    print("- GitHub OIDC/WIF: short-lived identity only in privileged job")
-    print("- stored caller token and service-account JSON: forbidden")
+    print("- Vercel edge: short-lived GitHub OIDC Trusted Source identity only")
+    print("- ProofOS caller: short-lived Google WIF ID token only")
+    print("- static Vercel bypass secret, stored caller token, and service-account JSON: forbidden")
     print("- automatic trigger: successful main-branch live evidence only")
     print("- HOLD: safe green authorization result; privileged job stays skipped")
     print("- authenticated collection: cross-checked against sealed launch bundle")
