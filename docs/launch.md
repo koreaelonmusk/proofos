@@ -146,6 +146,10 @@ isolated to this diagnostic job and is not reused as Google Cloud identity.
 For rejected Trusted Sources requests, the diagnostic may also persist a strict
 non-secret projection of the GitHub OIDC payload: `iss`, `aud`, `sub`,
 repository identifiers, `ref`, workflow identity, event name, and runner type.
+GitHub can emit empty optional claims for event types such as
+`deployment_status`; empty optional values are omitted instead of being treated
+as an authentication failure. Issuer, audience, subject, and repository remain
+mandatory.
 The JWT signature and raw token are never persisted, and the projection is
 diagnostic only. It is not used as authorization input. The independent artifact
 verifier requires the GitHub Actions issuer, the ProofOS repository, and the

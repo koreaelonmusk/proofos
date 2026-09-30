@@ -126,11 +126,14 @@ def _oidc_claim_projection(token: str) -> dict[str, str]:
         raise TrustedSourceProbeError("GitHub OIDC payload is not an object")
 
     projected: dict[str, str] = {}
+    required = {"iss", "aud", "sub", "repository"}
     for key in OIDC_CLAIM_KEYS:
         value = claims.get(key)
-        if value is None:
+        if value is None or value == "":
+            if key in required:
+                raise TrustedSourceProbeError(f"GitHub OIDC claim {key} is missing")
             continue
-        if not isinstance(value, str) or not value or len(value) > 600:
+        if not isinstance(value, str) or len(value) > 600:
             raise TrustedSourceProbeError(f"GitHub OIDC claim {key} is invalid")
         projected[key] = value
 
@@ -415,7 +418,7 @@ def _self_test() -> None:
         "repository_id": "1341515802",
         "repository_owner": "koreaelonmusk",
         "repository_owner_id": "44775845",
-        "ref": "refs/heads/main",
+        "ref": "",
         "ref_type": "branch",
         "workflow": "Vercel Live Smoke Evidence",
         "workflow_ref": "koreaelonmusk/proofos/.github/workflows/vercel-live-smoke.yml@refs/heads/main",
@@ -428,7 +431,7 @@ def _self_test() -> None:
     ).decode("ascii").rstrip("=")
     projected = _oidc_claim_projection(f"e30.{payload}.sig")
     assert projected["aud"] == "https://github.com/koreaelonmusk"
-    assert projected["ref"] == "refs/heads/main"
+    assert "ref" not in projected
     assert (
         _trusted_source_error_code(
             b'{"error":{"code":"TRUSTED_SOURCES_OIDC_DISCOVERY_FAILED","message":"secret detail"}}'
