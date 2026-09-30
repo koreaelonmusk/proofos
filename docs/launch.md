@@ -212,10 +212,15 @@ true:
 - the Trusted Source OIDC projection is bound to the main
   `vercel-live-smoke.yml` deployment-status workflow.
 
-The proof contains only hashes, deployment identity, bounded outcomes, and the
-next-evidence scope. It never contains either OIDC token. The independent
-`verify_trusted_promotion_proof.py` re-derives the proof from all five
-constituents instead of trusting the producer.
+The proof contains only hashes, deployment identity, the verified GitHub
+source-run ID, bounded outcomes, and the next-evidence scope. It never contains
+either OIDC token. The source-run ID is supplied only after the workflow has
+verified the source run identity and downloaded every constituent through the
+run-scoped artifact API. The independent `verify_trusted_promotion_proof.py`
+requires the expected run ID and re-derives the proof from all five constituents
+instead of trusting the producer. This closes cross-run splicing where two
+reruns of the same deployment event could otherwise contribute individually
+valid artifacts to one promotion.
 
 The credential-free authorization job creates and independently verifies this
 proof before it may return `authorized=true`. The privileged job then
