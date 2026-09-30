@@ -98,6 +98,9 @@ def validate() -> list[str]:
 
         "Verify automatic provider diagnosis provenance",
         "vercel-trusted-diagnosis-",
+        "vercel-trusted-followup-",
+        "verify_vercel_trusted_source_diagnosis.py",
+        '--followup-run-id "$FOLLOWUP_RUN_ID"',
         "followup_run_id",
         "Verify source evidence workflow identity",
         "Download sealed launch bundle with bounded retry",
