@@ -21,7 +21,7 @@ from verify_vercel_trusted_source_artifact import (
     verify_evidence as verify_trusted_source,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KIND = "proofos-trusted-promotion-proof"
 STATUS = "AUTHORIZED_FOR_AUTHENTICATED_E2E"
 TRUSTED_READY = "TRUSTED_SOURCE_ACCEPTED_READY_AND_ANONYMOUS_DENIED"
@@ -60,6 +60,7 @@ def derive_trusted_promotion(
     trusted_source: Any,
     *,
     expected_git_sha: str = "",
+    source_run_id: int = 0,
 ) -> dict[str, Any]:
     try:
         launch = verify_verdict(
@@ -79,6 +80,12 @@ def derive_trusted_promotion(
 
     if not isinstance(verdict, dict) or not isinstance(trusted_source, dict):
         raise TrustedPromotionError("promotion inputs must be JSON objects")
+    if (
+        not isinstance(source_run_id, int)
+        or isinstance(source_run_id, bool)
+        or source_run_id <= 0
+    ):
+        raise TrustedPromotionError("source run id must be a positive integer")
 
     if launch["status"] != "HOLD":
         raise TrustedPromotionError("trusted promotion is only defined for public HOLD")
@@ -140,6 +147,7 @@ def derive_trusted_promotion(
         "github_deployment_id": launch["github_deployment_id"],
         "github_deployment_status_id": launch["github_deployment_status_id"],
         "deployment_environment": launch["deployment_environment"],
+        "source_run_id": source_run_id,
         "manifest_sha256": launch["manifest_sha256"],
         "verdict_sha256": launch["verdict_sha256"],
         "trusted_source_evidence_sha256": trusted["evidence_sha256"],
@@ -156,7 +164,7 @@ def derive_trusted_promotion(
             "does not rewrite or upgrade the public observer launch verdict",
             "authorizes only the next authenticated E2E evidence step",
             "requires public HOLD to be caused only by Vercel edge observation blocking",
-            "requires same-origin same-SHA same-deployment Trusted Source READY evidence",
+            "requires same-origin same-SHA same-deployment same-run Trusted Source READY evidence",
             "does not prove authenticated collection or production GO",
         ],
     }
@@ -223,7 +231,13 @@ def _self_test() -> None:
     trusted = _signed(trusted)
 
     proof = derive_trusted_promotion(
-        health, trust, manifest, verdict, trusted, expected_git_sha=sha
+        health,
+        trust,
+        manifest,
+        verdict,
+        trusted,
+        expected_git_sha=sha,
+        source_run_id=789,
     )
     assert proof["status"] == STATUS
     assert len(proof["promotion_sha256"]) == 64
@@ -235,7 +249,13 @@ def _self_test() -> None:
     )
     try:
         derive_trusted_promotion(
-            health, trust, manifest, verdict, bad, expected_git_sha=sha
+            health,
+            trust,
+            manifest,
+            verdict,
+            bad,
+            expected_git_sha=sha,
+            source_run_id=789,
         )
     except TrustedPromotionError:
         pass
@@ -262,6 +282,7 @@ def main() -> int:
     parser.add_argument("verdict", nargs="?", type=Path)
     parser.add_argument("trusted_source", nargs="?", type=Path)
     parser.add_argument("--expected-git-sha", default="")
+    parser.add_argument("--source-run-id", type=int, default=0)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
@@ -283,6 +304,8 @@ def main() -> int:
         parser.error("five evidence inputs and --output are required")
     if not args.expected_git_sha:
         parser.error("--expected-git-sha is required")
+    if args.source_run_id <= 0:
+        parser.error("--source-run-id must be a positive integer")
 
     try:
         proof = derive_trusted_promotion(
@@ -292,6 +315,7 @@ def main() -> int:
             _load(args.verdict),
             _load(args.trusted_source),
             expected_git_sha=args.expected_git_sha,
+            source_run_id=args.source_run_id,
         )
     except TrustedPromotionError as exc:
         print(f"trusted promotion proof FAILED: {exc}", file=sys.stderr)

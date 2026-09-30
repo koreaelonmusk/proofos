@@ -59,6 +59,7 @@ def authorize(
     deployment_url: str,
     trusted_source: Any | None = None,
     trusted_promotion: Any | None = None,
+    source_run_id: int = 0,
 ) -> dict[str, Any]:
     try:
         verified = verify_verdict(
@@ -100,6 +101,7 @@ def authorize(
                 trusted_source,
                 trusted_promotion,
                 expected_git_sha=expected_git_sha,
+                expected_source_run_id=source_run_id,
             )
         except TrustedPromotionVerificationError as exc:
             raise E2EAuthorizationError(
@@ -123,6 +125,7 @@ def authorize(
         "status": status,
         "authorization_basis": authorization_basis,
         "trusted_promotion_sha256": promotion_sha256,
+        "source_run_id": source_run_id if source_run_id > 0 else None,
         "target_origin": verified["target_origin"],
         "workflow_source_git_sha": verified["workflow_source_git_sha"],
         "github_deployment_id": verified["github_deployment_id"],
@@ -233,6 +236,7 @@ def main() -> int:
     parser.add_argument("verdict", nargs="?", type=Path)
     parser.add_argument("--trusted-source", type=Path)
     parser.add_argument("--trusted-promotion", type=Path)
+    parser.add_argument("--source-run-id", type=int, default=0)
     parser.add_argument("--expected-git-sha", default="")
     parser.add_argument("--deployment-url", default="")
     parser.add_argument("--self-test", action="store_true")
@@ -265,6 +269,7 @@ def main() -> int:
                 if args.trusted_promotion is not None
                 else None
             ),
+            source_run_id=args.source_run_id,
         )
     except E2EAuthorizationError as exc:
         print(f"authenticated E2E AUTHORIZATION INVALID: {exc}", file=sys.stderr)

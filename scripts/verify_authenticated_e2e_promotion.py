@@ -59,6 +59,7 @@ def verify_promotion(
     expected_git_sha: str = "",
     trusted_source: Any | None = None,
     trusted_promotion: Any | None = None,
+    source_run_id: int = 0,
 ) -> dict[str, Any]:
     try:
         launch = verify_verdict(
@@ -110,6 +111,7 @@ def verify_promotion(
                 trusted_source,
                 trusted_promotion,
                 expected_git_sha=expected_git_sha,
+                expected_source_run_id=source_run_id,
             )
         except TrustedPromotionVerificationError as exc:
             raise PromotionVerificationError(
@@ -200,6 +202,7 @@ def verify_promotion(
         "manifest_sha256": launch["manifest_sha256"],
         "authorization_basis": authorization_basis,
         "trusted_promotion_sha256": trusted_promotion_sha256,
+        "source_run_id": source_run_id if source_run_id > 0 else None,
         "authenticated_evidence_sha256": auth_digest.lower(),
         "collector_id": authenticated["collector_id"],
         "attestation_outcome": authenticated["attestation_outcome"],
@@ -353,6 +356,7 @@ def main() -> int:
     parser.add_argument("authenticated_evidence", nargs="?", type=Path)
     parser.add_argument("--trusted-source", type=Path)
     parser.add_argument("--trusted-promotion", type=Path)
+    parser.add_argument("--source-run-id", type=int, default=0)
     parser.add_argument("--expected-git-sha", default="")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
@@ -400,6 +404,7 @@ def main() -> int:
                 if args.trusted_promotion is not None
                 else None
             ),
+            source_run_id=args.source_run_id,
         )
     except (OSError, json.JSONDecodeError, PromotionVerificationError) as exc:
         print(f"authenticated E2E promotion INVALID: {exc}", file=sys.stderr)
