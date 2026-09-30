@@ -63,19 +63,20 @@ def authorize(
     except VerdictVerificationError as exc:
         raise E2EAuthorizationError(f"launch evidence is invalid: {exc}") from exc
 
-    requested_origin = _origin(deployment_url)
+    requested_origin = (
+        _origin(deployment_url)
+        if deployment_url.strip()
+        else verified["target_origin"]
+    )
     if verified["target_origin"] != requested_origin:
         raise E2EAuthorizationError(
             "requested deployment does not match the sealed launch verdict origin"
         )
 
-    if verified["status"] != READY:
-        raise E2EAuthorizationError(
-            "sealed launch verdict does not authorize authenticated E2E"
-        )
+    authorized = verified["status"] == READY
 
     return {
-        "authorized": True,
+        "authorized": authorized,
         "status": verified["status"],
         "target_origin": verified["target_origin"],
         "workflow_source_git_sha": verified["workflow_source_git_sha"],
@@ -109,19 +110,16 @@ def _self_test() -> None:
         hold_manifest,
         expected_git_sha=sha,
     )
-    try:
-        authorize(
-            hold_health,
-            hold_trust,
-            hold_manifest,
-            hold_verdict,
-            expected_git_sha=sha,
-            deployment_url=origin,
-        )
-    except E2EAuthorizationError:
-        pass
-    else:
-        raise AssertionError("HOLD verdict authorized authenticated E2E")
+    hold = authorize(
+        hold_health,
+        hold_trust,
+        hold_manifest,
+        hold_verdict,
+        expected_git_sha=sha,
+        deployment_url=origin,
+    )
+    assert hold["authorized"] is False
+    assert hold["status"] == "HOLD"
 
     ready_health = _observed_health(origin, sha)
     ready_trust = _ready_trust(origin, sha)
@@ -140,8 +138,19 @@ def _self_test() -> None:
         expected_git_sha=sha,
         deployment_url=origin,
     )
-    assert result["authorized"]
+    assert result["authorized"] is True
     assert result["status"] == READY
+
+    automatic = authorize(
+        ready_health,
+        ready_trust,
+        ready_manifest,
+        ready_verdict,
+        expected_git_sha=sha,
+        deployment_url="",
+    )
+    assert automatic["authorized"] is True
+    assert automatic["target_origin"] == origin
 
     try:
         authorize(
@@ -188,8 +197,8 @@ def main() -> int:
         item is None for item in (args.health, args.trust, args.manifest, args.verdict)
     ):
         parser.error("health, trust, manifest, and verdict artifacts are required")
-    if not args.expected_git_sha or not args.deployment_url:
-        parser.error("--expected-git-sha and --deployment-url are required")
+    if not args.expected_git_sha:
+        parser.error("--expected-git-sha is required")
 
     try:
         result = authorize(
@@ -201,7 +210,7 @@ def main() -> int:
             deployment_url=args.deployment_url,
         )
     except E2EAuthorizationError as exc:
-        print(f"authenticated E2E NOT AUTHORIZED: {exc}", file=sys.stderr)
+        print(f"authenticated E2E AUTHORIZATION INVALID: {exc}", file=sys.stderr)
         return 2
 
     print(json.dumps(result, sort_keys=True))
