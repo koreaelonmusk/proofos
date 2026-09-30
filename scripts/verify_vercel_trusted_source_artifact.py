@@ -11,7 +11,7 @@ import sys
 from typing import Any
 from urllib.parse import urlsplit
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KIND = "vercel-trusted-source-observation"
 TRUSTED_SOURCE_ERROR_RE = re.compile(r"^TRUSTED_SOURCES_[A-Z0-9_]{1,80}$")
 OIDC_CLAIM_KEYS = {
@@ -32,8 +32,8 @@ OIDC_CLAIM_KEYS = {
 }
 OUTCOMES = {
     "TRUSTED_SOURCE_REJECTED",
-    "TRUSTED_SOURCE_ACCEPTED_READY",
-    "TRUSTED_SOURCE_ACCEPTED_NOT_READY",
+    "TRUSTED_SOURCE_ACCEPTED_READY_AND_ANONYMOUS_DENIED",
+    "TRUSTED_SOURCE_ACCEPTED_NOT_READY_AND_ANONYMOUS_DENIED",
 }
 
 
@@ -220,7 +220,7 @@ def verify_evidence(value: Any) -> dict[str, Any]:
         if "vercel_error_code" in value:
             expected_keys.add("vercel_error_code")
     else:
-        expected_keys.update({"health", "readiness"})
+        expected_keys.update({"health", "readiness", "anonymous_collect"})
 
     if set(value) != expected_keys:
         raise TrustedSourceArtifactError("artifact top-level schema drifted")
@@ -270,10 +270,27 @@ def verify_evidence(value: Any) -> dict[str, Any]:
         _health(value.get("health"), origin=origin, sha=sha)
         expected_ready = (
             "ready"
-            if outcome == "TRUSTED_SOURCE_ACCEPTED_READY"
+            if outcome == "TRUSTED_SOURCE_ACCEPTED_READY_AND_ANONYMOUS_DENIED"
             else "not_ready"
         )
         _readiness(value.get("readiness"), expected=expected_ready)
+        anonymous = value.get("anonymous_collect")
+        if (
+            not isinstance(anonymous, dict)
+            or set(anonymous) != {"outcome", "http_status"}
+            or anonymous.get("outcome") != "ANONYMOUS_COLLECTION_DENIED"
+            or anonymous.get("http_status") != 401
+        ):
+            raise TrustedSourceArtifactError(
+                "accepted trusted-source evidence must prove anonymous collection denial"
+            )
+        if not any(
+            "denied anonymous collection before probe or signing authority" in item
+            for item in boundary
+        ):
+            raise TrustedSourceArtifactError(
+                "anonymous caller-auth denial boundary is missing"
+            )
 
     return {
         "valid": True,
@@ -299,7 +316,7 @@ def _base(outcome: str) -> dict[str, Any]:
     sha = "0123456789abcdef0123456789abcdef01234567"
     origin = "https://proofos-production.vercel.app"
     return {
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "kind": KIND,
         "observed_at": "2026-09-30T00:00:00+00:00",
         "observer": "github-actions-oidc",
@@ -347,7 +364,7 @@ def _self_test() -> None:
     )
     assert verify_evidence(_signed(rejected))["valid"]
 
-    accepted = _base("TRUSTED_SOURCE_ACCEPTED_NOT_READY")
+    accepted = _base("TRUSTED_SOURCE_ACCEPTED_NOT_READY_AND_ANONYMOUS_DENIED")
     accepted.update(
         {
             "health": {
@@ -366,9 +383,14 @@ def _self_test() -> None:
                 "service": "proofos-collector",
                 "issues": ["signing_key_not_configured"],
             },
+            "anonymous_collect": {
+                "outcome": "ANONYMOUS_COLLECTION_DENIED",
+                "http_status": 401,
+            },
             "claim_boundary": [
                 "proves Vercel Trusted Sources accepted the GitHub Actions OIDC request",
                 "records only the public health/readiness contract after edge authentication",
+                "proves the reached application denied anonymous collection before probe or signing authority",
                 "does not prove authenticated collector invocation or signed evidence collection",
                 "does not reveal or persist the OIDC token",
             ],
@@ -377,7 +399,7 @@ def _self_test() -> None:
     assert verify_evidence(_signed(accepted))["valid"]
 
     tampered = _signed(accepted)
-    tampered["readiness"]["status"] = "ready"
+    tampered["anonymous_collect"]["http_status"] = 200
     try:
         verify_evidence(tampered)
     except TrustedSourceArtifactError:

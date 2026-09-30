@@ -134,14 +134,27 @@ The diagnostic records one of:
   bounded machine code in the `TRUSTED_SOURCES_*` namespace, the evidence may
   include only that code as `vercel_error_code`. Raw response bodies, provider
   messages, request metadata, and OIDC tokens are never persisted.
-- `TRUSTED_SOURCE_ACCEPTED_NOT_READY`: edge authentication succeeded and
-  application readiness was reached, but ProofOS intentionally remained not-ready.
-- `TRUSTED_SOURCE_ACCEPTED_READY`: edge authentication and application
-  readiness both succeeded. This still does not prove signed authenticated
-  collection; that remains the next independent E2E gate.
+- `TRUSTED_SOURCE_ACCEPTED_NOT_READY_AND_ANONYMOUS_DENIED`: edge
+  authentication succeeded, application readiness was reached and reported
+  not-ready, and the same trusted-source path reached `/v1/collect` where
+  ProofOS itself returned the exact anonymous caller-auth denial.
+- `TRUSTED_SOURCE_ACCEPTED_READY_AND_ANONYMOUS_DENIED`: edge authentication
+  succeeded, application health/readiness were observed as ready, and the same
+  trusted-source path proved anonymous collection is denied before any probe or
+  signing authority is exercised. This still does not prove an authenticated
+  signed collection; that remains the next independent E2E gate.
 
 The public smoke job has no `id-token: write`. The trusted OIDC authority is
 isolated to this diagnostic job and is not reused as Google Cloud identity.
+
+Accepted Trusted Source evidence is intentionally stronger than a successful
+`/healthz` or `/readyz` response. After the edge accepts the GitHub OIDC token,
+the probe also sends an application-anonymous `POST /v1/collect` using the same
+edge identity but no ProofOS caller credential. The artifact is accepted only
+when the response is exactly HTTP 401 with
+`{"detail":"collector caller authentication failed"}`. Any other 401/403 is
+treated as an edge/authentication ambiguity and the probe fails closed. No
+collection probe or signing work can run in this anonymous request path.
 
 For rejected Trusted Sources requests, the diagnostic may also persist a strict
 non-secret projection of the GitHub OIDC payload: `iss`, `aud`, `sub`,

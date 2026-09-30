@@ -1,9 +1,11 @@
 """Probe Vercel Deployment Protection with a GitHub Actions OIDC identity.
 
-This probe is diagnostic and evidence-only. It never performs collection or
-signing. It tests whether Vercel Trusted Sources accepts the GitHub Actions OIDC
-token for the exact production deployment, then records health/readiness without
-persisting the token.
+This probe is diagnostic and evidence-only. It never authenticates as an
+application caller and never performs signing. It tests whether Vercel Trusted
+Sources accepts the GitHub Actions OIDC token for the exact production
+deployment, records health/readiness, and proves that the reached application
+still denies an anonymous collection request before probe or signing authority.
+The OIDC token is never persisted.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KIND = "vercel-trusted-source-observation"
 MAX_BODY = 64 * 1024
 TRUSTED_SOURCE_ERROR_RE = re.compile(r"^TRUSTED_SOURCES_[A-Z0-9_]{1,80}$")
@@ -278,6 +280,71 @@ def _request_json(
         ) from exc
 
 
+def _is_application_anonymous_denial(status: int, raw: bytes) -> bool:
+    if status != 401:
+        return False
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(payload, dict)
+        and set(payload) == {"detail"}
+        and payload.get("detail") == "collector caller authentication failed"
+    )
+
+
+def _observe_anonymous_collect_denial(
+    origin: str,
+    *,
+    headers: dict[str, str],
+    timeout: float,
+) -> dict[str, Any]:
+    body = json.dumps(
+        {
+            "execution_id": "trusted-source-no-authority",
+            "task_id": "trusted-source-no-authority",
+            "evidence_kind": "runtime",
+            "profile_id": "runtime-health-v1",
+            "request_nonce": "trusted-source-no-authority",
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    request = Request(
+        f"{origin}/v1/collect",
+        data=body,
+        headers={**headers, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            response.read(MAX_BODY)
+            raise TrustedSourceProbeError(
+                f"anonymous collection unexpectedly returned HTTP {response.status}"
+            )
+    except HTTPError as exc:
+        raw = exc.read(MAX_BODY)
+        if _is_application_anonymous_denial(exc.code, raw):
+            return {
+                "outcome": "ANONYMOUS_COLLECTION_DENIED",
+                "http_status": 401,
+            }
+        if exc.code in {401, 403}:
+            code = _trusted_source_error_code(raw)
+            suffix = f" ({code})" if code else ""
+            raise TrustedSourceProbeError(
+                "trusted source was rejected before application caller-auth denial"
+                + suffix
+            ) from exc
+        raise TrustedSourceProbeError(
+            f"anonymous collection returned unexpected HTTP {exc.code}"
+        ) from exc
+    except URLError as exc:
+        raise TrustedSourceProbeError(
+            f"anonymous collection was unreachable: {type(exc.reason).__name__}"
+        ) from exc
+
+
 def _hash(value: dict[str, Any]) -> dict[str, Any]:
     canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return {
@@ -367,10 +434,15 @@ def observe(
         )
 
     readiness = _readiness(ready_payload, ready_status)
+    anonymous_collect = _observe_anonymous_collect_denial(
+        origin,
+        headers=headers,
+        timeout=timeout,
+    )
     outcome = (
-        "TRUSTED_SOURCE_ACCEPTED_READY"
+        "TRUSTED_SOURCE_ACCEPTED_READY_AND_ANONYMOUS_DENIED"
         if readiness["status"] == "ready"
-        else "TRUSTED_SOURCE_ACCEPTED_NOT_READY"
+        else "TRUSTED_SOURCE_ACCEPTED_NOT_READY_AND_ANONYMOUS_DENIED"
     )
 
     return _hash(
@@ -386,9 +458,11 @@ def observe(
             "oidc_claims": oidc_claims,
             "health": health,
             "readiness": readiness,
+            "anonymous_collect": anonymous_collect,
             "claim_boundary": [
                 "proves Vercel Trusted Sources accepted the GitHub Actions OIDC request",
                 "records only the public health/readiness contract after edge authentication",
+                "proves the reached application denied anonymous collection before probe or signing authority",
                 "does not prove authenticated collector invocation or signed evidence collection",
                 "does not reveal or persist the OIDC token",
             ],
@@ -440,6 +514,15 @@ def _self_test() -> None:
     )
     assert _trusted_source_error_code(b'{"code":"SOME_OTHER_ERROR"}') is None
     assert _trusted_source_error_code(b"not-json") is None
+    assert _is_application_anonymous_denial(
+        401, b'{"detail":"collector caller authentication failed"}'
+    )
+    assert not _is_application_anonymous_denial(
+        401, b'{"error":{"code":"TRUSTED_SOURCES_AUTHENTICATION_FAILED"}}'
+    )
+    assert not _is_application_anonymous_denial(
+        403, b'{"detail":"collector caller authentication failed"}'
+    )
 
     for invalid in (
         "http://proofos.vercel.app",
