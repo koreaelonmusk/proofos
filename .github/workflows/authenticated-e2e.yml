@@ -101,37 +101,33 @@ jobs:
           test "$(gh api "$api" --jq '.head_branch')" = "main"
           echo "source evidence workflow identity OK"
 
-      - name: Download sealed health evidence
-        uses: actions/download-artifact@v7
-        with:
-          name: vercel-${{ steps.source.outputs.run_id }}.json
-          path: artifacts/launch-gate/health
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.source.outputs.run_id }}
-
-      - name: Download sealed trust evidence
-        uses: actions/download-artifact@v7
-        with:
-          name: vercel-trust-${{ steps.source.outputs.run_id }}.json
-          path: artifacts/launch-gate/trust
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.source.outputs.run_id }}
-
-      - name: Download sealed evidence manifest
-        uses: actions/download-artifact@v7
-        with:
-          name: vercel-manifest-${{ steps.source.outputs.run_id }}.json
-          path: artifacts/launch-gate/manifest
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.source.outputs.run_id }}
-
-      - name: Download sealed launch verdict
-        uses: actions/download-artifact@v7
-        with:
-          name: vercel-launch-verdict-${{ steps.source.outputs.run_id }}.json
-          path: artifacts/launch-gate/verdict
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.source.outputs.run_id }}
+      - name: Download sealed launch bundle with bounded retry
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json"
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-trust-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json"
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-manifest-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json"
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-launch-verdict-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"
 
       - name: Authorize privileged authenticated E2E
         id: authorize
@@ -181,37 +177,33 @@ jobs:
           uv run python scripts/verify_authenticated_collection_artifact.py --self-test
           uv run python scripts/verify_authenticated_e2e_promotion.py --self-test
 
-      - name: Download authorized health evidence
-        uses: actions/download-artifact@v7
-        with:
-          name: vercel-${{ needs.authorize.outputs.source_run_id }}.json
-          path: artifacts/launch-gate/health
-          github-token: ${{ github.token }}
-          run-id: ${{ needs.authorize.outputs.source_run_id }}
-
-      - name: Download authorized trust evidence
-        uses: actions/download-artifact@v7
-        with:
-          name: vercel-trust-${{ needs.authorize.outputs.source_run_id }}.json
-          path: artifacts/launch-gate/trust
-          github-token: ${{ github.token }}
-          run-id: ${{ needs.authorize.outputs.source_run_id }}
-
-      - name: Download authorized evidence manifest
-        uses: actions/download-artifact@v7
-        with:
-          name: vercel-manifest-${{ needs.authorize.outputs.source_run_id }}.json
-          path: artifacts/launch-gate/manifest
-          github-token: ${{ github.token }}
-          run-id: ${{ needs.authorize.outputs.source_run_id }}
-
-      - name: Download authorized launch verdict
-        uses: actions/download-artifact@v7
-        with:
-          name: vercel-launch-verdict-${{ needs.authorize.outputs.source_run_id }}.json
-          path: artifacts/launch-gate/verdict
-          github-token: ${{ github.token }}
-          run-id: ${{ needs.authorize.outputs.source_run_id }}
+      - name: Download authorized launch bundle with bounded retry
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json"
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-trust-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json"
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-manifest-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json"
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-launch-verdict-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"
 
       - name: Mint short-lived Google caller ID token via GitHub OIDC
         id: google-auth
