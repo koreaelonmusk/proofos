@@ -193,12 +193,16 @@ jobs:
           python scripts/build_vercel_trusted_source_diagnosis.py \
             "artifacts/trusted-followup/original/vercel-trusted-source-$SOURCE_RUN_ID.json" \
             "artifacts/trusted-followup/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --followup-run-id "$GITHUB_RUN_ID" \
             --output "artifacts/trusted-followup/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json"
 
           python scripts/verify_vercel_trusted_source_diagnosis.py \
             "artifacts/trusted-followup/original/vercel-trusted-source-$SOURCE_RUN_ID.json" \
             "artifacts/trusted-followup/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
-            "artifacts/trusted-followup/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json"
+            "artifacts/trusted-followup/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --followup-run-id "$GITHUB_RUN_ID"
 
       - name: Upload Trusted Source follow-up evidence
         uses: actions/upload-artifact@v7
