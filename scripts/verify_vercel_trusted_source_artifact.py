@@ -14,6 +14,22 @@ from urllib.parse import urlsplit
 SCHEMA_VERSION = 1
 KIND = "vercel-trusted-source-observation"
 TRUSTED_SOURCE_ERROR_RE = re.compile(r"^TRUSTED_SOURCES_[A-Z0-9_]{1,80}$")
+OIDC_CLAIM_KEYS = {
+    "iss",
+    "aud",
+    "sub",
+    "repository",
+    "repository_id",
+    "repository_owner",
+    "repository_owner_id",
+    "ref",
+    "ref_type",
+    "workflow",
+    "workflow_ref",
+    "workflow_sha",
+    "event_name",
+    "runner_environment",
+}
 OUTCOMES = {
     "TRUSTED_SOURCE_REJECTED",
     "TRUSTED_SOURCE_ACCEPTED_READY",
@@ -87,6 +103,27 @@ def _deployment_event(value: Any) -> dict[str, Any]:
     }
 
 
+def _oidc_claims(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict) or not value:
+        raise TrustedSourceArtifactError("OIDC claim projection is missing")
+    if set(value) - OIDC_CLAIM_KEYS:
+        raise TrustedSourceArtifactError("OIDC claim projection contains extra fields")
+    for key, item in value.items():
+        if not isinstance(item, str) or not item or len(item) > 600:
+            raise TrustedSourceArtifactError(f"OIDC claim {key} is invalid")
+
+    if value.get("iss") != "https://token.actions.githubusercontent.com":
+        raise TrustedSourceArtifactError("OIDC issuer is not GitHub Actions")
+    if value.get("aud") != "https://github.com/koreaelonmusk":
+        raise TrustedSourceArtifactError("OIDC audience is not the repository owner URL")
+    if value.get("repository") != "koreaelonmusk/proofos":
+        raise TrustedSourceArtifactError("OIDC repository claim is invalid")
+    subject = value.get("sub")
+    if not isinstance(subject, str) or not subject.startswith("repo:koreaelonmusk/proofos:"):
+        raise TrustedSourceArtifactError("OIDC subject is outside the ProofOS repository")
+    return {key: value[key] for key in sorted(value)}
+
+
 def _hash_without_digest(value: dict[str, Any]) -> str:
     unsigned = {
         key: item for key, item in value.items() if key != "evidence_sha256"
@@ -145,6 +182,7 @@ def verify_evidence(value: Any) -> dict[str, Any]:
         "target_origin",
         "workflow_source_git_sha",
         "deployment_event",
+        "oidc_claims",
         "outcome",
         "claim_boundary",
         "evidence_sha256",
@@ -186,6 +224,8 @@ def verify_evidence(value: Any) -> dict[str, Any]:
     if event["environment_url"] != origin or event["source_git_sha"] != sha:
         raise TrustedSourceArtifactError("deployment binding mismatch")
 
+    oidc = _oidc_claims(value.get("oidc_claims"))
+
     boundary = value.get("claim_boundary")
     if not isinstance(boundary, list) or not boundary or not all(
         isinstance(item, str) and item.strip() for item in boundary
@@ -217,6 +257,10 @@ def verify_evidence(value: Any) -> dict[str, Any]:
         "outcome": outcome,
         "target_origin": origin,
         "workflow_source_git_sha": sha,
+        "oidc_audience": oidc["aud"],
+        "oidc_subject": oidc["sub"],
+        "oidc_ref": oidc.get("ref"),
+        "oidc_workflow_ref": oidc.get("workflow_ref"),
         "evidence_sha256": digest.lower(),
     }
 
@@ -244,6 +288,22 @@ def _base(outcome: str) -> dict[str, Any]:
             "environment": "production",
             "environment_url": origin,
             "source_git_sha": sha,
+        },
+        "oidc_claims": {
+            "iss": "https://token.actions.githubusercontent.com",
+            "aud": "https://github.com/koreaelonmusk",
+            "sub": "repo:koreaelonmusk/proofos:ref:refs/heads/main",
+            "repository": "koreaelonmusk/proofos",
+            "repository_id": "1341515802",
+            "repository_owner": "koreaelonmusk",
+            "repository_owner_id": "44775845",
+            "ref": "refs/heads/main",
+            "ref_type": "branch",
+            "workflow": "Vercel Live Smoke Evidence",
+            "workflow_ref": "koreaelonmusk/proofos/.github/workflows/vercel-live-smoke.yml@refs/heads/main",
+            "workflow_sha": sha,
+            "event_name": "deployment_status",
+            "runner_environment": "github-hosted",
         },
         "outcome": outcome,
     }
