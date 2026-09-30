@@ -62,7 +62,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           AUTO_RUN_ID: ${{ github.event.workflow_run.id }}
           AUTO_GIT_SHA: ${{ github.event.workflow_run.head_sha }}
-          MANUAL_RUN_ID: ${{ steps.source.outputs.run_id }}
+          MANUAL_RUN_ID: ${{ inputs.live_evidence_run_id }}
           MANUAL_GIT_SHA: ${{ inputs.expected_git_sha }}
           MANUAL_DEPLOYMENT_URL: ${{ inputs.deployment_url }}
         run: |
