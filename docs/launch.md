@@ -190,6 +190,32 @@ form. ProofOS accepts only the two exact repository-bound shapes: the legacy
 separately verified `repository_owner_id` and `repository_id` claims. Arbitrary
 owner/repository IDs or broader subject prefixes are rejected.
 
+### Trusted Source follow-up diagnostic
+
+Production evidence from run `36677450734` proved that the original
+`deployment_status` Trusted Source job mints a GitHub OIDC token whose subject
+can end in an empty ref segment (for example `...:ref:`). Vercel rejected that
+token even though the ProofOS-side token projection was valid and safely bound to
+the repository.
+
+ProofOS therefore adds a second, diagnostic-only path:
+`.github/workflows/vercel-trusted-source-followup.yml`. It is triggered only by
+a successfully completed main-branch `Vercel Live Smoke Evidence` run. Its
+credential-free authorization job re-verifies the source workflow identity,
+downloads the exact run-scoped public evidence bundle, independently verifies the
+launch verdict, and requires the deployment environment to be production.
+
+Only after those checks does a separate job receive `id-token: write` and mint
+a fresh GitHub OIDC identity from the main workflow-run context. The follow-up
+probe uses the already sealed deployment origin, Git SHA, deployment ID and
+deployment-status ID from the verified source run. This path does not rewrite
+the original Trusted Source artifact and does not yet authorize Trusted
+Promotion. It exists to prove whether changing only the GitHub OIDC event context
+is enough for Vercel Trusted Sources to accept the request.
+
+The original `deployment_status` path remains in place as a comparison control.
+Static Vercel bypass secrets remain forbidden in the follow-up path.
+
 ### Trusted Promotion Proof
 
 `build_trusted_promotion_proof.py` is a narrow authority bridge, not a second
