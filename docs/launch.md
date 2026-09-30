@@ -216,6 +216,33 @@ is enough for Vercel Trusted Sources to accept the request.
 The original `deployment_status` path remains in place as a comparison control.
 Static Vercel bypass secrets remain forbidden in the follow-up path.
 
+### Provider capability diagnosis
+
+Live follow-up run `36684524588` normalized the GitHub OIDC identity to
+`ref:refs/heads/main` but Vercel still returned
+`TRUSTED_SOURCE_REJECTED`. This disproves the empty-ref event-context
+hypothesis for the observed deployment.
+
+The follow-up workflow now compares the independently verified original
+`deployment_status` Trusted Source artifact with the independently verified
+`workflow_run` follow-up artifact for the exact same origin, Git SHA,
+deployment ID and deployment-status ID. When both are rejected even though the
+follow-up identity is main-ref bound, it emits a separate provider capability
+diagnosis:
+
+`PROVIDER_CONFIGURATION_REQUIRED / EVENT_CONTEXT_NOT_ROOT_CAUSE`
+
+This diagnosis does not mutate provider settings and does not authorize
+Authenticated E2E. It converts a previously ambiguous red path into bounded
+evidence that the next unresolved dependency is Vercel project/provider trust
+configuration.
+
+A valid but non-promotable Trusted Source artifact is also a normal HOLD state.
+The Authenticated E2E authorization workflow independently verifies the artifact
+and exits green with `authorized=false` instead of treating provider rejection
+as a code failure. Tampered, mismatched, or unverifiable artifacts remain hard
+failures.
+
 ### Trusted Promotion Proof
 
 `build_trusted_promotion_proof.py` is a narrow authority bridge, not a second
