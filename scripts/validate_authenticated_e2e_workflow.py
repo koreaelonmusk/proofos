@@ -10,6 +10,9 @@ WORKFLOW = ROOT / ".github/workflows/authenticated-e2e.yml"
 
 GLOBAL_REQUIRED = (
     "permissions: {}",
+    'workflows: ["Vercel Live Smoke Evidence"]',
+    "types: [completed]",
+    "workflow_dispatch:",
     "live_evidence_run_id:",
     "authorize:",
     "privileged-e2e:",
@@ -75,6 +78,14 @@ def validate() -> list[str]:
 
     required_authorize = (
         "actions: read",
+        "github.event.workflow_run.conclusion == 'success'",
+        "github.event.workflow_run.head_branch == 'main'",
+        "- name: Resolve sealed source run",
+        "AUTO_RUN_ID: ${{ github.event.workflow_run.id }}",
+        "AUTO_GIT_SHA: ${{ github.event.workflow_run.head_sha }}",
+        "MANUAL_RUN_ID: ${{ inputs.live_evidence_run_id }}",
+        "test \"$(gh api \"$api\" --jq '.head_branch')\" = \"main\"",
+
         "Verify source evidence workflow identity",
         "Download sealed health evidence",
         "Download sealed trust evidence",
@@ -85,6 +96,7 @@ def validate() -> list[str]:
         "authorized: ${{ steps.authorize.outputs.authorized }}",
         "target_origin: ${{ steps.authorize.outputs.target_origin }}",
         "source_git_sha: ${{ steps.authorize.outputs.source_git_sha }}",
+        'echo "authorized=$authorized" >> "$GITHUB_OUTPUT"',
     )
     for snippet in required_authorize:
         if snippet not in authorize:
@@ -98,6 +110,10 @@ def validate() -> list[str]:
         issues.append("oidc_permission_must_exist_exactly_once")
     if text.count("uses: google-github-actions/auth@v3") != 1:
         issues.append("google_auth_action_must_appear_exactly_once")
+    if text.count('workflows: ["Vercel Live Smoke Evidence"]') != 1:
+        issues.append("live_smoke_workflow_trigger_must_appear_exactly_once")
+    if 'test "$(jq -r '.authorized' <<<"$result")" = "true"' in authorize:
+        issues.append("hold_must_not_fail_authorization_job")
 
     gate = authorize.find("- name: Authorize privileged authenticated E2E")
     source = authorize.find("Verify source evidence workflow identity")
@@ -128,6 +144,8 @@ def main() -> int:
     print("- privileged job: created only after READY authorization")
     print("- GitHub OIDC/WIF: short-lived identity only in privileged job")
     print("- stored caller token and service-account JSON: forbidden")
+    print("- automatic trigger: successful main-branch live evidence only")
+    print("- HOLD: safe green authorization result; privileged job stays skipped")
     print("- authenticated collection: cross-checked against sealed launch bundle")
     return 0
 
