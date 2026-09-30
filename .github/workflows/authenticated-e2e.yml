@@ -41,6 +41,8 @@ jobs:
       source_run_id: ${{ steps.authorize.outputs.source_run_id }}
       manifest_sha256: ${{ steps.authorize.outputs.manifest_sha256 }}
       verdict_sha256: ${{ steps.authorize.outputs.verdict_sha256 }}
+      authorization_basis: ${{ steps.authorize.outputs.authorization_basis }}
+      trusted_promotion_sha256: ${{ steps.authorize.outputs.trusted_promotion_sha256 }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -129,6 +131,50 @@ jobs:
             --artifact "vercel-launch-verdict-$SOURCE_RUN_ID.json" \
             --output "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"
 
+      - name: Build Trusted Promotion Proof when public observer is HOLD
+        id: trusted-promotion
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          EXPECTED_GIT_SHA: ${{ steps.source.outputs.git_sha }}
+        run: |
+          set -euo pipefail
+          verdict="artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"
+          status="$(jq -r '.status' "$verdict")"
+          if [[ "$status" == "READY_FOR_AUTHENTICATED_E2E" ]]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "public launch verdict already authorizes authenticated E2E"
+            exit 0
+          fi
+          test "$status" = "HOLD"
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/build_trusted_promotion_proof.py \
+            "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
+            "$verdict" \
+            "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            --expected-git-sha "$EXPECTED_GIT_SHA" \
+            --output "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/verify_trusted_promotion_proof.py \
+            "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
+            "$verdict" \
+            "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json" \
+            --expected-git-sha "$EXPECTED_GIT_SHA"
+
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
       - name: Authorize privileged authenticated E2E
         id: authorize
         shell: bash
@@ -138,7 +184,21 @@ jobs:
           EXPECTED_GIT_SHA: ${{ steps.source.outputs.git_sha }}
         run: |
           set -euo pipefail
-          result="$(uv run python scripts/authorize_authenticated_e2e.py             "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"             --expected-git-sha "$EXPECTED_GIT_SHA"             --deployment-url "$DEPLOYMENT_URL")"
+          args=(
+            "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json"
+            "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json"
+            "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json"
+            "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"
+            --expected-git-sha "$EXPECTED_GIT_SHA"
+            --deployment-url "$DEPLOYMENT_URL"
+          )
+          if [[ -f "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json" ]]; then
+            args+=(
+              --trusted-source "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json"
+              --trusted-promotion "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json"
+            )
+          fi
+          result="$(uv run python scripts/authorize_authenticated_e2e.py "${args[@]}")"
           echo "$result"
           authorized="$(jq -r '.authorized' <<<"$result")"
           [[ "$authorized" == "true" || "$authorized" == "false" ]] || {
@@ -150,6 +210,8 @@ jobs:
           echo "source_run_id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
           echo "manifest_sha256=$(jq -r '.manifest_sha256' <<<"$result")" >> "$GITHUB_OUTPUT"
           echo "verdict_sha256=$(jq -r '.verdict_sha256' <<<"$result")" >> "$GITHUB_OUTPUT"
+          echo "authorization_basis=$(jq -r '.authorization_basis' <<<"$result")" >> "$GITHUB_OUTPUT"
+          echo "trusted_promotion_sha256=$(jq -r '.trusted_promotion_sha256 // ""' <<<"$result")" >> "$GITHUB_OUTPUT"
 
   privileged-e2e:
     needs: authorize
@@ -205,6 +267,45 @@ jobs:
             --artifact "vercel-launch-verdict-$SOURCE_RUN_ID.json" \
             --output "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"
 
+      - name: Independently rebuild authorized Trusted Promotion Proof
+        if: needs.authorize.outputs.authorization_basis == 'trusted_promotion_proof'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
+          EXPECTED_GIT_SHA: ${{ needs.authorize.outputs.source_git_sha }}
+          AUTHORIZED_PROMOTION_SHA: ${{ needs.authorize.outputs.trusted_promotion_sha256 }}
+        run: |
+          set -euo pipefail
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/build_trusted_promotion_proof.py \
+            "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            --expected-git-sha "$EXPECTED_GIT_SHA" \
+            --output "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/verify_trusted_promotion_proof.py \
+            "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json" \
+            --expected-git-sha "$EXPECTED_GIT_SHA"
+
+          rebuilt="$(jq -r '.promotion_sha256' "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json")"
+          test -n "$AUTHORIZED_PROMOTION_SHA"
+          test "$rebuilt" = "$AUTHORIZED_PROMOTION_SHA"
+          echo "trusted promotion proof independently rebuilt and matched authorization"
+
       - name: Mint short-lived Vercel Trusted Source identity
         id: vercel-oidc
         uses: actions/github-script@v7
@@ -249,7 +350,22 @@ jobs:
           SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
           EXPECTED_GIT_SHA: ${{ needs.authorize.outputs.source_git_sha }}
         run: |
-          uv run python scripts/verify_authenticated_e2e_promotion.py             "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"             "artifacts/authenticated-e2e/collection-${{ github.run_id }}.json"             --expected-git-sha "$EXPECTED_GIT_SHA"             --output "artifacts/authenticated-e2e/promotion-${{ github.run_id }}.json"
+          args=(
+            "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json"
+            "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json"
+            "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json"
+            "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"
+            "artifacts/authenticated-e2e/collection-${{ github.run_id }}.json"
+            --expected-git-sha "$EXPECTED_GIT_SHA"
+            --output "artifacts/authenticated-e2e/promotion-${{ github.run_id }}.json"
+          )
+          if [[ -f "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json" ]]; then
+            args+=(
+              --trusted-source "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json"
+              --trusted-promotion "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json"
+            )
+          fi
+          uv run python scripts/verify_authenticated_e2e_promotion.py "${args[@]}"
 
       - name: Upload authenticated collection evidence
         uses: actions/upload-artifact@v7
