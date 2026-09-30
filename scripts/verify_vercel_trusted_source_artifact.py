@@ -118,8 +118,31 @@ def _oidc_claims(value: Any) -> dict[str, str]:
         raise TrustedSourceArtifactError("OIDC audience is not the repository owner URL")
     if value.get("repository") != "koreaelonmusk/proofos":
         raise TrustedSourceArtifactError("OIDC repository claim is invalid")
+    if value.get("repository_owner") != "koreaelonmusk":
+        raise TrustedSourceArtifactError("OIDC repository owner claim is invalid")
+
+    repository_id = value.get("repository_id")
+    owner_id = value.get("repository_owner_id")
+    if (
+        not isinstance(repository_id, str)
+        or not repository_id.isdigit()
+        or not isinstance(owner_id, str)
+        or not owner_id.isdigit()
+    ):
+        raise TrustedSourceArtifactError("OIDC immutable repository identifiers are invalid")
+
     subject = value.get("sub")
-    if not isinstance(subject, str) or not subject.startswith("repo:koreaelonmusk/proofos:"):
+    if not isinstance(subject, str):
+        raise TrustedSourceArtifactError("OIDC subject is missing")
+
+    legacy_prefix = "repo:koreaelonmusk/proofos:"
+    immutable_prefix = (
+        f"repo:koreaelonmusk@{owner_id}/proofos@{repository_id}:"
+    )
+    if not (
+        subject.startswith(legacy_prefix)
+        or subject.startswith(immutable_prefix)
+    ):
         raise TrustedSourceArtifactError("OIDC subject is outside the ProofOS repository")
     return {key: value[key] for key in sorted(value)}
 
@@ -292,7 +315,7 @@ def _base(outcome: str) -> dict[str, Any]:
         "oidc_claims": {
             "iss": "https://token.actions.githubusercontent.com",
             "aud": "https://github.com/koreaelonmusk",
-            "sub": "repo:koreaelonmusk/proofos:ref:refs/heads/main",
+            "sub": "repo:koreaelonmusk@44775845/proofos@1341515802:ref:refs/heads/main",
             "repository": "koreaelonmusk/proofos",
             "repository_id": "1341515802",
             "repository_owner": "koreaelonmusk",
