@@ -316,7 +316,7 @@ def _base(outcome: str) -> dict[str, Any]:
     sha = "0123456789abcdef0123456789abcdef01234567"
     origin = "https://proofos-production.vercel.app"
     return {
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "kind": KIND,
         "observed_at": "2026-09-30T00:00:00+00:00",
         "observer": "github-actions-oidc",
