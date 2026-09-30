@@ -83,6 +83,8 @@ def validate() -> list[str]:
         "verify_vercel_trusted_source.py",
         "verify_vercel_trusted_source_artifact.py",
         "build_vercel_trusted_source_diagnosis.py",
+        '--source-run-id "$SOURCE_RUN_ID"',
+        '--followup-run-id "$GITHUB_RUN_ID"',
         "verify_vercel_trusted_source_diagnosis.py",
         "vercel-trusted-diagnosis-",
         "archive: false",
