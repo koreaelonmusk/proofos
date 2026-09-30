@@ -114,9 +114,13 @@ older deployment revision.
 ### Vercel Trusted Source diagnostic
 
 The regular live-smoke job remains credential-free and continues to record what an
-ordinary external observer can prove. A second `trusted-source` job exists only
-for successful **main / production** Vercel deployment events and has job-local
-`id-token: write`.
+ordinary external observer can prove. A credential-free
+`trusted-source-authorize` job first checks a successful production deployment
+event, checks out full `main` history, and proves the deployed commit is contained
+in `origin/main` with `git merge-base --is-ancestor`. Only its
+`authorized=true` output can create the separate `trusted-source` job that has
+job-local `id-token: write`. This avoids depending on provider-specific
+`deployment.ref` formatting while preserving the main-only authority boundary.
 
 That job follows Vercel's official Trusted Sources flow: GitHub Actions mints a
 short-lived OIDC token, masks it immediately, and the probe sends it only as
