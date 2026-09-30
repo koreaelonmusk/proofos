@@ -130,8 +130,25 @@ jobs:
             --artifact "$DIAGNOSIS_ARTIFACT" \
             --output "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json"
 
-          test "$(jq -r '.source_run_id' "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json")" = "$SOURCE_RUN_ID"
-          test "$(jq -r '.followup_run_id' "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json")" = "$FOLLOWUP_RUN_ID"
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$FOLLOWUP_RUN_ID" \
+            --artifact "vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/verify_vercel_trusted_source_diagnosis.py \
+            "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --followup-run-id "$FOLLOWUP_RUN_ID"
+
           echo "automatic provider diagnosis provenance OK"
 
       - name: Verify source evidence workflow identity
