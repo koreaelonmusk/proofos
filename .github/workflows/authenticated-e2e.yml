@@ -155,6 +155,16 @@ jobs:
             --artifact "vercel-trusted-source-$SOURCE_RUN_ID.json" \
             --output "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json"
 
+          verified_trusted="$(uv run python scripts/verify_vercel_trusted_source_artifact.py \
+            "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json")"
+          trusted_outcome="$(jq -r '.outcome' <<<"$verified_trusted")"
+          if [[ "$trusted_outcome" != "TRUSTED_SOURCE_ACCEPTED_READY_AND_ANONYMOUS_DENIED" ]]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "trusted_source_outcome=$trusted_outcome" >> "$GITHUB_OUTPUT"
+            echo "trusted source is valid but not promotable; keeping authenticated E2E on HOLD"
+            exit 0
+          fi
+
           uv run python scripts/build_trusted_promotion_proof.py \
             "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
             "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \

@@ -66,6 +66,7 @@ def validate() -> list[str]:
 
     required_trusted = (
         "needs: authorize",
+        "actions: read",
         "id-token: write",
         "Mint short-lived GitHub OIDC identity from main follow-up",
         "uses: actions/github-script@v7",
@@ -78,6 +79,9 @@ def validate() -> list[str]:
         "needs.authorize.outputs.github_deployment_status_id",
         "verify_vercel_trusted_source.py",
         "verify_vercel_trusted_source_artifact.py",
+        "build_vercel_trusted_source_diagnosis.py",
+        "verify_vercel_trusted_source_diagnosis.py",
+        "vercel-trusted-diagnosis-",
         "archive: false",
     )
     for snippet in required_trusted:
@@ -109,7 +113,7 @@ def main() -> int:
     print("Vercel trusted-source follow-up workflow contract OK")
     print("- source run: completed successful main live-evidence workflow only")
     print("- authorization job: artifact verification only, no OIDC, no secrets")
-    print("- trusted job: sole short-lived OIDC authority")
+    print("- trusted job: sole short-lived OIDC authority + run-scoped provider diagnosis")
     print("- static Vercel bypass authority: forbidden")
     return 0
 
