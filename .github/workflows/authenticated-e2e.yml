@@ -2,7 +2,7 @@ name: Authenticated E2E Evidence
 
 on:
   workflow_run:
-    workflows: ["Vercel Live Smoke Evidence"]
+    workflows: ["Vercel Trusted Source Follow-up"]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -62,17 +62,42 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          AUTO_RUN_ID: ${{ github.event.workflow_run.id }}
+          AUTO_FOLLOWUP_RUN_ID: ${{ github.event.workflow_run.id }}
           AUTO_GIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
           MANUAL_RUN_ID: ${{ inputs.live_evidence_run_id }}
           MANUAL_GIT_SHA: ${{ inputs.expected_git_sha }}
           MANUAL_DEPLOYMENT_URL: ${{ inputs.deployment_url }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "workflow_run" ]]; then
-            run_id="$AUTO_RUN_ID"
+            followup_run_id="$AUTO_FOLLOWUP_RUN_ID"
+            [[ "$followup_run_id" =~ ^[0-9]+$ ]] || {
+              echo "invalid follow-up run id"; exit 1;
+            }
+
+            api="repos/$GITHUB_REPOSITORY/actions/runs/$followup_run_id"
+            test "$(gh api "$api" --jq '.name')" = "Vercel Trusted Source Follow-up"
+            test "$(gh api "$api" --jq '.event')" = "workflow_run"
+            test "$(gh api "$api" --jq '.status')" = "completed"
+            test "$(gh api "$api" --jq '.conclusion')" = "success"
+            test "$(gh api "$api" --jq '.head_sha')" = "$AUTO_GIT_SHA"
+            test "$(gh api "$api" --jq '.head_branch')" = "main"
+
+            artifact_name="$(gh api "$api/artifacts" --jq '
+              [.artifacts[].name
+               | select(test("^vercel-trusted-diagnosis-[0-9]+\\.json$"))]
+              | if length == 1 then .[0] else empty end
+            ')"
+            [[ "$artifact_name" =~ ^vercel-trusted-diagnosis-([0-9]+)\.json$ ]] || {
+              echo "exactly one run-bound provider diagnosis artifact is required"
+              exit 1
+            }
+            run_id="${BASH_REMATCH[1]}"
             git_sha="$AUTO_GIT_SHA"
             deployment_url=""
+            echo "followup_run_id=$followup_run_id" >> "$GITHUB_OUTPUT"
+            echo "diagnosis_artifact=$artifact_name" >> "$GITHUB_OUTPUT"
           else
             run_id="$MANUAL_RUN_ID"
             git_sha="$MANUAL_GIT_SHA"
@@ -83,6 +108,48 @@ jobs:
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"
           echo "deployment_url=$deployment_url" >> "$GITHUB_OUTPUT"
+          if [[ "$EVENT_NAME" != "workflow_run" ]]; then
+            echo "followup_run_id=" >> "$GITHUB_OUTPUT"
+            echo "diagnosis_artifact=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify automatic provider diagnosis provenance
+        if: github.event_name == 'workflow_run'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOLLOWUP_RUN_ID: ${{ steps.source.outputs.followup_run_id }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          DIAGNOSIS_ARTIFACT: ${{ steps.source.outputs.diagnosis_artifact }}
+        run: |
+          set -euo pipefail
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$FOLLOWUP_RUN_ID" \
+            --artifact "$DIAGNOSIS_ARTIFACT" \
+            --output "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$FOLLOWUP_RUN_ID" \
+            --artifact "vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/verify_vercel_trusted_source_diagnosis.py \
+            "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --followup-run-id "$FOLLOWUP_RUN_ID"
+
+          echo "automatic provider diagnosis provenance OK"
 
       - name: Verify source evidence workflow identity
         shell: bash

@@ -283,6 +283,26 @@ authorized by the credential-free job before minting either short-lived
 identity. This prevents an authorization-time proof from being swapped before
 use.
 
+### Sequential trust pipeline
+
+The automatic trust pipeline is serialized as:
+
+`Vercel Live Smoke Evidence -> Vercel Trusted Source Follow-up -> Authenticated E2E Evidence`.
+
+Authenticated E2E no longer subscribes directly to the live-smoke workflow.
+Instead, a successful main-branch follow-up run must first publish exactly one
+run-bound provider diagnosis artifact. The E2E authorization job resolves the
+original live-smoke run ID from that artifact, downloads the original
+Trusted Source evidence and follow-up Trusted Source evidence, and independently
+re-verifies the provider diagnosis against both constituents before reading the
+sealed live launch bundle.
+
+The provider diagnosis schema binds both `source_run_id` and
+`followup_run_id` into its SHA-256. This prevents a diagnosis from another
+rerun from becoming an admission ticket. Manual recovery remains available and
+continues to accept an explicitly supplied live-evidence run ID, but the
+automatic path is strictly sequential.
+
 ### Automatic authenticated-E2E promotion
 
 The workflow also subscribes to completed `Vercel Live Smoke Evidence` runs.

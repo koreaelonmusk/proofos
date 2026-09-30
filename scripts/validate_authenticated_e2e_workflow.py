@@ -10,7 +10,7 @@ WORKFLOW = ROOT / ".github/workflows/authenticated-e2e.yml"
 
 GLOBAL_REQUIRED = (
     "permissions: {}",
-    'workflows: ["Vercel Live Smoke Evidence"]',
+    'workflows: ["Vercel Trusted Source Follow-up"]',
     "types: [completed]",
     "workflow_dispatch:",
     "live_evidence_run_id:",
@@ -91,11 +91,17 @@ def validate() -> list[str]:
         "github.event.workflow_run.conclusion == 'success'",
         "github.event.workflow_run.head_branch == 'main'",
         "- name: Resolve sealed source run",
-        "AUTO_RUN_ID: ${{ github.event.workflow_run.id }}",
+        "AUTO_FOLLOWUP_RUN_ID: ${{ github.event.workflow_run.id }}",
         "AUTO_GIT_SHA: ${{ github.event.workflow_run.head_sha }}",
         "MANUAL_RUN_ID: ${{ inputs.live_evidence_run_id }}",
         "test \"$(gh api \"$api\" --jq '.head_branch')\" = \"main\"",
 
+        "Verify automatic provider diagnosis provenance",
+        "vercel-trusted-diagnosis-",
+        "vercel-trusted-followup-",
+        "verify_vercel_trusted_source_diagnosis.py",
+        '--followup-run-id "$FOLLOWUP_RUN_ID"',
+        "followup_run_id",
         "Verify source evidence workflow identity",
         "Download sealed launch bundle with bounded retry",
         "uv run python scripts/download_run_artifact.py",
@@ -134,8 +140,10 @@ def validate() -> list[str]:
         issues.append("oidc_permission_must_exist_exactly_once")
     if text.count("uses: google-github-actions/auth@v3") != 1:
         issues.append("google_auth_action_must_appear_exactly_once")
-    if text.count('workflows: ["Vercel Live Smoke Evidence"]') != 1:
-        issues.append("live_smoke_workflow_trigger_must_appear_exactly_once")
+    if text.count('workflows: ["Vercel Trusted Source Follow-up"]') != 1:
+        issues.append("trusted_followup_workflow_trigger_must_appear_exactly_once")
+    if 'workflows: ["Vercel Live Smoke Evidence"]' in text:
+        issues.append("automatic_e2e_must_not_trigger_directly_from_live_smoke")
     if "test \"$(jq -r '.authorized' <<<\"$result\")\" = \"true\"" in authorize:
         issues.append("hold_must_not_fail_authorization_job")
 
@@ -184,7 +192,7 @@ def main() -> int:
     print("- Vercel edge: short-lived GitHub OIDC Trusted Source identity only")
     print("- ProofOS caller: short-lived Google WIF ID token only")
     print("- static Vercel bypass secret, stored caller token, and service-account JSON: forbidden")
-    print("- automatic trigger: successful main-branch live evidence only")
+    print("- automatic trigger: successful main-branch Trusted Source follow-up only")
     print("- public HOLD: promotable only from run-bound same-run Trusted Source READY + anonymous-denied proof")
     print("- authenticated collection: cross-checked against sealed launch bundle")
     return 0
