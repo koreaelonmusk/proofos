@@ -61,6 +61,35 @@ def verify_receipt(authorization: Any, receipt: Any, provider_diagnosis: Any | N
     }
 
 
+def _self_test() -> None:
+    auth = {
+        "authorized": False, "status": "HOLD", "authorization_basis": "none",
+        "trusted_promotion_sha256": None, "source_run_id": 10,
+        "target_origin": "https://proofos.example.vercel.app",
+        "workflow_source_git_sha": "a" * 40, "github_deployment_id": 1,
+        "github_deployment_status_id": 2, "deployment_environment": "production",
+        "manifest_sha256": "b" * 64, "verdict_sha256": "c" * 64,
+    }
+    diagnosis = {
+        "source_run_id": 10, "followup_run_id": 20,
+        "workflow_source_git_sha": "a" * 40,
+        "target_origin": "https://proofos.example.vercel.app",
+        "status": "PROVIDER_CONFIGURATION_REQUIRED",
+        "diagnosis_sha256": "d" * 64,
+    }
+    receipt = build_receipt(
+        auth,
+        source_run_id=10,
+        followup_run_id=20,
+        e2e_run_id=30,
+        provider_diagnosis=diagnosis,
+    )
+    result = verify_receipt(auth, receipt, diagnosis)
+    assert result["valid"] is True
+    assert result["status"] == "HOLD_PROVIDER_CONFIGURATION_REQUIRED"
+    print("trust pipeline receipt verifier self-test OK")
+
+
 def _load(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -70,7 +99,11 @@ def main() -> int:
     parser.add_argument("authorization", type=Path)
     parser.add_argument("receipt", type=Path)
     parser.add_argument("--provider-diagnosis", type=Path)
+    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
+    if args.self_test:
+        _self_test()
+        return 0
     try:
         result = verify_receipt(
             _load(args.authorization), _load(args.receipt),
