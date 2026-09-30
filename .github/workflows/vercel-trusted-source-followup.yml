@@ -126,6 +126,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      actions: read
       id-token: write
     steps:
       - uses: actions/checkout@v7
@@ -171,11 +172,43 @@ jobs:
           python scripts/verify_vercel_trusted_source_artifact.py \
             "artifacts/trusted-followup/vercel-trusted-followup-$SOURCE_RUN_ID.json"
 
+      - name: Compare original and follow-up Trusted Source outcomes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
+        run: |
+          set -euo pipefail
+
+          python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            --output "artifacts/trusted-followup/original/vercel-trusted-source-$SOURCE_RUN_ID.json"
+
+          python scripts/build_vercel_trusted_source_diagnosis.py \
+            "artifacts/trusted-followup/original/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/trusted-followup/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            --output "artifacts/trusted-followup/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json"
+
+          python scripts/verify_vercel_trusted_source_diagnosis.py \
+            "artifacts/trusted-followup/original/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/trusted-followup/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            "artifacts/trusted-followup/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json"
+
       - name: Upload Trusted Source follow-up evidence
         uses: actions/upload-artifact@v7
         with:
           name: vercel-trusted-followup-${{ needs.authorize.outputs.source_run_id }}.json
           path: artifacts/trusted-followup/vercel-trusted-followup-${{ needs.authorize.outputs.source_run_id }}.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Trusted Source provider diagnosis
+        uses: actions/upload-artifact@v7
+        with:
+          name: vercel-trusted-diagnosis-${{ needs.authorize.outputs.source_run_id }}.json
+          path: artifacts/trusted-followup/vercel-trusted-diagnosis-${{ needs.authorize.outputs.source_run_id }}.json
           archive: false
           if-no-files-found: error
           retention-days: 30
