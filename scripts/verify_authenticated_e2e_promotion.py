@@ -28,8 +28,12 @@ from verify_live_launch_verdict import (
     VerdictVerificationError,
     verify_verdict,
 )
+from verify_trusted_promotion_proof import (
+    TrustedPromotionVerificationError,
+    verify_promotion as verify_trusted_promotion,
+)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KIND = "proofos-authenticated-e2e-promotion"
 PROMOTED = "AUTHENTICATED_E2E_VERIFIED"
 HOLD = "HOLD"
@@ -53,6 +57,8 @@ def verify_promotion(
     authenticated_evidence: Any,
     *,
     expected_git_sha: str = "",
+    trusted_source: Any | None = None,
+    trusted_promotion: Any | None = None,
 ) -> dict[str, Any]:
     try:
         launch = verify_verdict(
@@ -86,9 +92,44 @@ def verify_promotion(
 
     reasons: list[str] = []
     next_required: list[str] = []
-    if launch["status"] != "READY_FOR_AUTHENTICATED_E2E":
+    authorization_basis = "public_launch_verdict"
+    trusted_promotion_sha256 = None
+    authority_ready = launch["status"] == "READY_FOR_AUTHENTICATED_E2E"
+
+    if not authority_ready and (trusted_source is not None or trusted_promotion is not None):
+        if trusted_source is None or trusted_promotion is None:
+            raise PromotionVerificationError(
+                "trusted source and trusted promotion proof must be supplied together"
+            )
+        try:
+            promoted = verify_trusted_promotion(
+                health_evidence,
+                trust_evidence,
+                manifest,
+                launch_verdict,
+                trusted_source,
+                trusted_promotion,
+                expected_git_sha=expected_git_sha,
+            )
+        except TrustedPromotionVerificationError as exc:
+            raise PromotionVerificationError(
+                f"trusted promotion proof invalid: {exc}"
+            ) from exc
+        if promoted["target_origin"] != launch["target_origin"]:
+            raise PromotionVerificationError(
+                "trusted promotion and launch target different origins"
+            )
+        if promoted["workflow_source_git_sha"] != launch["workflow_source_git_sha"]:
+            raise PromotionVerificationError(
+                "trusted promotion and launch bind to different Git SHAs"
+            )
+        authority_ready = promoted["status"] == "AUTHORIZED_FOR_AUTHENTICATED_E2E"
+        authorization_basis = "trusted_promotion_proof"
+        trusted_promotion_sha256 = promoted["promotion_sha256"]
+
+    if not authority_ready:
         status = HOLD
-        reasons.append("launch_gate_not_ready_for_authenticated_e2e")
+        reasons.append("launch_authority_not_ready_for_authenticated_e2e")
         next_required.extend(launch["next_required_evidence"])
     elif authenticated["attestation_outcome"] != "HEALTHY":
         status = HOLD
@@ -112,7 +153,11 @@ def verify_promotion(
         status = PROMOTED
         reasons.extend(
             [
-                "pre_auth_health_observed",
+                (
+                    "trusted_source_pre_auth_boundary_observed"
+                    if authorization_basis == "trusted_promotion_proof"
+                    else "pre_auth_health_observed"
+                ),
                 "collector_readiness_observed",
                 "anonymous_collection_denial_observed",
                 "authenticated_signed_collection_observed",
@@ -153,6 +198,8 @@ def verify_promotion(
         "deployment_environment": launch["deployment_environment"],
         "launch_verdict_sha256": launch_digest.lower(),
         "manifest_sha256": launch["manifest_sha256"],
+        "authorization_basis": authorization_basis,
+        "trusted_promotion_sha256": trusted_promotion_sha256,
         "authenticated_evidence_sha256": auth_digest.lower(),
         "collector_id": authenticated["collector_id"],
         "attestation_outcome": authenticated["attestation_outcome"],
@@ -304,6 +351,8 @@ def main() -> int:
     parser.add_argument("manifest", nargs="?", type=Path)
     parser.add_argument("launch_verdict", nargs="?", type=Path)
     parser.add_argument("authenticated_evidence", nargs="?", type=Path)
+    parser.add_argument("--trusted-source", type=Path)
+    parser.add_argument("--trusted-promotion", type=Path)
     parser.add_argument("--expected-git-sha", default="")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
@@ -341,6 +390,16 @@ def main() -> int:
             launch,
             authenticated,
             expected_git_sha=args.expected_git_sha,
+            trusted_source=(
+                json.loads(args.trusted_source.read_text(encoding="utf-8"))
+                if args.trusted_source is not None
+                else None
+            ),
+            trusted_promotion=(
+                json.loads(args.trusted_promotion.read_text(encoding="utf-8"))
+                if args.trusted_promotion is not None
+                else None
+            ),
         )
     except (OSError, json.JSONDecodeError, PromotionVerificationError) as exc:
         print(f"authenticated E2E promotion INVALID: {exc}", file=sys.stderr)
