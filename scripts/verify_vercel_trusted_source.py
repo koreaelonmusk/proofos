@@ -1,0 +1,374 @@
+"""Probe Vercel Deployment Protection with a GitHub Actions OIDC identity.
+
+This probe is diagnostic and evidence-only. It never performs collection or
+signing. It tests whether Vercel Trusted Sources accepts the GitHub Actions OIDC
+token for the exact production deployment, then records health/readiness without
+persisting the token.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+import sys
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
+
+SCHEMA_VERSION = 1
+KIND = "vercel-trusted-source-observation"
+MAX_BODY = 64 * 1024
+
+
+class TrustedSourceProbeError(RuntimeError):
+    pass
+
+
+def _origin(value: str) -> str:
+    parts = urlsplit(value.strip())
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or not parts.hostname.lower().endswith(".vercel.app")
+        or parts.username is not None
+        or parts.password is not None
+        or parts.port not in {None, 443}
+        or parts.path not in {"", "/"}
+        or parts.query
+        or parts.fragment
+    ):
+        raise TrustedSourceProbeError(
+            "deployment URL must be an exact https://*.vercel.app origin"
+        )
+    return f"https://{parts.hostname.lower()}"
+
+
+def _git_sha(value: str) -> str:
+    value = value.strip().lower()
+    if len(value) != 40 or any(ch not in "0123456789abcdef" for ch in value):
+        raise TrustedSourceProbeError("source git SHA must be a full 40-character SHA")
+    return value
+
+
+def _positive_int(value: str, *, label: str) -> int:
+    value = value.strip()
+    if not value.isdigit() or int(value) <= 0:
+        raise TrustedSourceProbeError(f"{label} must be a positive integer")
+    return int(value)
+
+
+def _environment(value: str) -> str:
+    value = value.strip().lower()
+    if value not in {"production", "preview", "development"}:
+        raise TrustedSourceProbeError("deployment environment is unsupported")
+    return value
+
+
+def _event_binding(
+    *,
+    deployment_id: str,
+    deployment_status_id: str,
+    environment: str,
+    environment_url: str,
+    source_git_sha: str,
+) -> dict[str, Any]:
+    return {
+        "github_deployment_id": _positive_int(
+            deployment_id, label="GitHub deployment id"
+        ),
+        "github_deployment_status_id": _positive_int(
+            deployment_status_id, label="GitHub deployment status id"
+        ),
+        "environment": _environment(environment),
+        "environment_url": _origin(environment_url),
+        "source_git_sha": _git_sha(source_git_sha),
+    }
+
+
+def _headers(token: str) -> dict[str, str]:
+    token = token.strip()
+    if not token:
+        raise TrustedSourceProbeError("GitHub OIDC token is unavailable")
+    return {
+        "Accept": "application/json",
+        "User-Agent": "proofos-vercel-trusted-source/1",
+        "x-vercel-trusted-oidc-idp-token": token,
+    }
+
+
+def _read_json(raw: bytes, *, label: str) -> Any:
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise TrustedSourceProbeError(f"{label} did not return valid JSON") from exc
+
+
+def _health(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict) or set(payload) != {"status", "service", "runtime"}:
+        raise TrustedSourceProbeError("health response schema drifted")
+    if payload.get("status") != "ok" or payload.get("service") != "proofos-collector":
+        raise TrustedSourceProbeError("health response identity is invalid")
+    runtime = payload.get("runtime")
+    if not isinstance(runtime, dict):
+        raise TrustedSourceProbeError("health runtime provenance is missing")
+    allowed = {"platform", "environment", "deployment_id", "region", "git_sha", "url"}
+    if set(runtime) - allowed:
+        raise TrustedSourceProbeError("health runtime contains non-allowlisted fields")
+    return {
+        "status": "ok",
+        "service": "proofos-collector",
+        "runtime": {key: runtime[key] for key in sorted(runtime)},
+    }
+
+
+def _readiness(payload: Any, status: int) -> dict[str, Any]:
+    if not isinstance(payload, dict) or set(payload) != {"status", "service", "issues"}:
+        raise TrustedSourceProbeError("readiness response schema drifted")
+    if payload.get("service") != "proofos-collector":
+        raise TrustedSourceProbeError("readiness service identity is invalid")
+    issues = payload.get("issues")
+    if not isinstance(issues, list) or any(
+        not isinstance(item, str) or not item or len(item) > 120 for item in issues
+    ):
+        raise TrustedSourceProbeError("readiness issue list is invalid")
+
+    state = payload.get("status")
+    if state == "ready":
+        if status != 200 or issues:
+            raise TrustedSourceProbeError("ready response is inconsistent")
+    elif state == "not_ready":
+        if status != 503:
+            raise TrustedSourceProbeError("not_ready response must use HTTP 503")
+    else:
+        raise TrustedSourceProbeError("readiness status is invalid")
+
+    return {
+        "status": state,
+        "service": "proofos-collector",
+        "issues": sorted(issues),
+    }
+
+
+def _request_json(
+    url: str,
+    *,
+    headers: dict[str, str],
+    timeout: float,
+    accepted_error_statuses: set[int] | None = None,
+) -> tuple[int, Any]:
+    accepted_error_statuses = accepted_error_statuses or set()
+    request = Request(url, headers=headers)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return response.status, _read_json(
+                response.read(MAX_BODY), label=urlsplit(url).path or "/"
+            )
+    except HTTPError as exc:
+        raw = exc.read(MAX_BODY)
+        if exc.code in accepted_error_statuses:
+            return exc.code, _read_json(raw, label=urlsplit(url).path or "/")
+        if exc.code in {401, 403}:
+            return exc.code, None
+        raise TrustedSourceProbeError(
+            f"trusted-source request returned unexpected HTTP {exc.code}"
+        ) from exc
+    except URLError as exc:
+        raise TrustedSourceProbeError(
+            f"trusted-source request was unreachable: {type(exc.reason).__name__}"
+        ) from exc
+
+
+def _hash(value: dict[str, Any]) -> dict[str, Any]:
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {
+        **value,
+        "evidence_sha256": hashlib.sha256(canonical).hexdigest(),
+    }
+
+
+def observe(
+    origin: str,
+    *,
+    oidc_token: str,
+    timeout: float,
+    source_git_sha: str,
+    deployment_event: dict[str, Any],
+) -> dict[str, Any]:
+    origin = _origin(origin)
+    if deployment_event["environment"] != "production":
+        raise TrustedSourceProbeError("trusted-source probe is production-only")
+    if deployment_event["environment_url"] != origin:
+        raise TrustedSourceProbeError(
+            "target origin does not match deployment event environment URL"
+        )
+    if deployment_event["source_git_sha"] != _git_sha(source_git_sha):
+        raise TrustedSourceProbeError(
+            "source SHA does not match deployment event source SHA"
+        )
+
+    headers = _headers(oidc_token)
+    health_status, health_payload = _request_json(
+        f"{origin}/healthz",
+        headers=headers,
+        timeout=timeout,
+    )
+
+    if health_status in {401, 403}:
+        return _hash(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "kind": KIND,
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "observer": "github-actions-oidc",
+                "target_origin": origin,
+                "workflow_source_git_sha": _git_sha(source_git_sha),
+                "deployment_event": deployment_event,
+                "outcome": "TRUSTED_SOURCE_REJECTED",
+                "http_status": health_status,
+                "claim_boundary": [
+                    "proves the Vercel edge did not accept this GitHub Actions OIDC request",
+                    "does not reveal or persist the OIDC token",
+                    "does not prove application health or readiness",
+                ],
+            }
+        )
+
+    if health_status != 200:
+        raise TrustedSourceProbeError("health endpoint did not return HTTP 200")
+
+    health = _health(health_payload)
+    runtime = health["runtime"]
+    if runtime.get("platform") != "vercel":
+        raise TrustedSourceProbeError("health runtime is not Vercel")
+    if runtime.get("environment") != "production":
+        raise TrustedSourceProbeError("health runtime is not production")
+    if runtime.get("git_sha") != _git_sha(source_git_sha):
+        raise TrustedSourceProbeError("health runtime Git SHA does not match source SHA")
+    if runtime.get("url") and _origin(runtime["url"]) != origin:
+        raise TrustedSourceProbeError("health runtime URL does not match target origin")
+
+    ready_status, ready_payload = _request_json(
+        f"{origin}/readyz",
+        headers=headers,
+        timeout=timeout,
+        accepted_error_statuses={503},
+    )
+    if ready_status in {401, 403}:
+        raise TrustedSourceProbeError(
+            "trusted source passed health but was rejected before readiness"
+        )
+
+    readiness = _readiness(ready_payload, ready_status)
+    outcome = (
+        "TRUSTED_SOURCE_ACCEPTED_READY"
+        if readiness["status"] == "ready"
+        else "TRUSTED_SOURCE_ACCEPTED_NOT_READY"
+    )
+
+    return _hash(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "kind": KIND,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "observer": "github-actions-oidc",
+            "target_origin": origin,
+            "workflow_source_git_sha": _git_sha(source_git_sha),
+            "deployment_event": deployment_event,
+            "outcome": outcome,
+            "health": health,
+            "readiness": readiness,
+            "claim_boundary": [
+                "proves Vercel Trusted Sources accepted the GitHub Actions OIDC request",
+                "records only the public health/readiness contract after edge authentication",
+                "does not prove authenticated collector invocation or signed evidence collection",
+                "does not reveal or persist the OIDC token",
+            ],
+        }
+    )
+
+
+def _self_test() -> None:
+    origin = "https://proofos-preview.vercel.app"
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    binding = _event_binding(
+        deployment_id="123",
+        deployment_status_id="456",
+        environment="production",
+        environment_url=origin,
+        source_git_sha=sha,
+    )
+    assert binding["environment"] == "production"
+    assert _origin(origin + "/") == origin
+    assert _git_sha(sha.upper()) == sha
+    assert _headers("opaque-token")["x-vercel-trusted-oidc-idp-token"] == "opaque-token"
+
+    for invalid in (
+        "http://proofos.vercel.app",
+        "https://example.com",
+        "https://proofos.vercel.app/path",
+    ):
+        try:
+            _origin(invalid)
+        except TrustedSourceProbeError:
+            continue
+        raise AssertionError("unsafe origin accepted")
+
+    print("Vercel trusted-source probe self-test OK")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--url")
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--timeout", type=float, default=10.0)
+    parser.add_argument("--expected-git-sha", default="")
+    parser.add_argument("--github-deployment-id", default="")
+    parser.add_argument("--github-deployment-status-id", default="")
+    parser.add_argument("--github-environment", default="")
+    parser.add_argument("--environment-url", default="")
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args()
+
+    if args.self_test:
+        _self_test()
+        return 0
+
+    if not args.url or args.output is None:
+        parser.error("--url and --output are required unless --self-test is used")
+
+    try:
+        binding = _event_binding(
+            deployment_id=args.github_deployment_id,
+            deployment_status_id=args.github_deployment_status_id,
+            environment=args.github_environment,
+            environment_url=args.environment_url,
+            source_git_sha=args.expected_git_sha,
+        )
+        evidence = observe(
+            args.url,
+            oidc_token=os.environ.get("VERCEL_TRUSTED_OIDC_TOKEN", ""),
+            timeout=args.timeout,
+            source_git_sha=args.expected_git_sha,
+            deployment_event=binding,
+        )
+    except TrustedSourceProbeError as exc:
+        print(f"Vercel trusted-source probe FAILED: {exc}", file=sys.stderr)
+        return 1
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(f"Vercel trusted-source probe: {evidence['outcome']}")
+    print(f"evidence: {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
