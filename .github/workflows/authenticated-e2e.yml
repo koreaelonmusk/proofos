@@ -1,6 +1,9 @@
 name: Authenticated E2E Evidence
 
 on:
+  workflow_run:
+    workflows: ["Vercel Live Smoke Evidence"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       deployment_url:
@@ -20,6 +23,12 @@ permissions: {}
 
 jobs:
   authorize:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -46,12 +55,39 @@ jobs:
       - name: Validate credential-free authorization gate locally
         run: uv run python scripts/authorize_authenticated_e2e.py --self-test
 
+      - name: Resolve sealed source run
+        id: source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          AUTO_RUN_ID: ${{ github.event.workflow_run.id }}
+          AUTO_GIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          MANUAL_RUN_ID: ${{ inputs.live_evidence_run_id }}
+          MANUAL_GIT_SHA: ${{ inputs.expected_git_sha }}
+          MANUAL_DEPLOYMENT_URL: ${{ inputs.deployment_url }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            run_id="$AUTO_RUN_ID"
+            git_sha="$AUTO_GIT_SHA"
+            deployment_url=""
+          else
+            run_id="$MANUAL_RUN_ID"
+            git_sha="$MANUAL_GIT_SHA"
+            deployment_url="$MANUAL_DEPLOYMENT_URL"
+          fi
+          [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "invalid source run id"; exit 1; }
+          [[ "$git_sha" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "invalid expected git sha"; exit 1; }
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"
+          echo "deployment_url=$deployment_url" >> "$GITHUB_OUTPUT"
+
       - name: Verify source evidence workflow identity
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN_ID: ${{ inputs.live_evidence_run_id }}
-          EXPECTED_GIT_SHA: ${{ inputs.expected_git_sha }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          EXPECTED_GIT_SHA: ${{ steps.source.outputs.git_sha }}
         run: |
           set -euo pipefail
           [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]] || { echo "invalid source run id"; exit 1; }
@@ -62,53 +98,57 @@ jobs:
           test "$(gh api "$api" --jq '.status')" = "completed"
           test "$(gh api "$api" --jq '.conclusion')" = "success"
           test "$(gh api "$api" --jq '.head_sha')" = "$EXPECTED_GIT_SHA"
+          test "$(gh api "$api" --jq '.head_branch')" = "main"
           echo "source evidence workflow identity OK"
 
       - name: Download sealed health evidence
         uses: actions/download-artifact@v7
         with:
-          name: vercel-${{ inputs.live_evidence_run_id }}.json
+          name: vercel-${{ steps.source.outputs.run_id }}.json
           path: artifacts/launch-gate/health
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.live_evidence_run_id }}
+          run-id: ${{ steps.source.outputs.run_id }}
 
       - name: Download sealed trust evidence
         uses: actions/download-artifact@v7
         with:
-          name: vercel-trust-${{ inputs.live_evidence_run_id }}.json
+          name: vercel-trust-${{ steps.source.outputs.run_id }}.json
           path: artifacts/launch-gate/trust
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.live_evidence_run_id }}
+          run-id: ${{ steps.source.outputs.run_id }}
 
       - name: Download sealed evidence manifest
         uses: actions/download-artifact@v7
         with:
-          name: vercel-manifest-${{ inputs.live_evidence_run_id }}.json
+          name: vercel-manifest-${{ steps.source.outputs.run_id }}.json
           path: artifacts/launch-gate/manifest
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.live_evidence_run_id }}
+          run-id: ${{ steps.source.outputs.run_id }}
 
       - name: Download sealed launch verdict
         uses: actions/download-artifact@v7
         with:
-          name: vercel-launch-verdict-${{ inputs.live_evidence_run_id }}.json
+          name: vercel-launch-verdict-${{ steps.source.outputs.run_id }}.json
           path: artifacts/launch-gate/verdict
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.live_evidence_run_id }}
+          run-id: ${{ steps.source.outputs.run_id }}
 
       - name: Authorize privileged authenticated E2E
         id: authorize
         shell: bash
         env:
-          SOURCE_RUN_ID: ${{ inputs.live_evidence_run_id }}
-          DEPLOYMENT_URL: ${{ inputs.deployment_url }}
-          EXPECTED_GIT_SHA: ${{ inputs.expected_git_sha }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          DEPLOYMENT_URL: ${{ steps.source.outputs.deployment_url }}
+          EXPECTED_GIT_SHA: ${{ steps.source.outputs.git_sha }}
         run: |
           set -euo pipefail
           result="$(uv run python scripts/authorize_authenticated_e2e.py             "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json"             "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"             --expected-git-sha "$EXPECTED_GIT_SHA"             --deployment-url "$DEPLOYMENT_URL")"
           echo "$result"
-          test "$(jq -r '.authorized' <<<"$result")" = "true"
-          echo "authorized=true" >> "$GITHUB_OUTPUT"
+          authorized="$(jq -r '.authorized' <<<"$result")"
+          [[ "$authorized" == "true" || "$authorized" == "false" ]] || {
+            echo "invalid authorization result"; exit 1;
+          }
+          echo "authorized=$authorized" >> "$GITHUB_OUTPUT"
           echo "target_origin=$(jq -r '.target_origin' <<<"$result")" >> "$GITHUB_OUTPUT"
           echo "source_git_sha=$(jq -r '.workflow_source_git_sha' <<<"$result")" >> "$GITHUB_OUTPUT"
           echo "source_run_id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
