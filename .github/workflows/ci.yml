@@ -214,4 +214,5 @@ jobs:
       - name: Validate Trust Pipeline Receipt
         run: |
           uv run python scripts/build_trust_pipeline_receipt.py --self-test
+          uv run python scripts/verify_trust_pipeline_receipt.py --self-test
 
