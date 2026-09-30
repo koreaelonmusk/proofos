@@ -14,7 +14,7 @@ from verify_vercel_trusted_source_artifact import (
     verify_evidence,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KIND = "proofos-vercel-trusted-source-capability-diagnosis"
 REJECTED = "TRUSTED_SOURCE_REJECTED"
 
@@ -44,7 +44,13 @@ def _event(value: Any) -> dict[str, Any]:
     return value
 
 
-def derive_diagnosis(original: Any, followup: Any) -> dict[str, Any]:
+def derive_diagnosis(
+    original: Any,
+    followup: Any,
+    *,
+    source_run_id: int,
+    followup_run_id: int,
+) -> dict[str, Any]:
     try:
         first = verify_evidence(original)
         second = verify_evidence(followup)
@@ -53,6 +59,20 @@ def derive_diagnosis(original: Any, followup: Any) -> dict[str, Any]:
 
     if not isinstance(original, dict) or not isinstance(followup, dict):
         raise TrustedSourceDiagnosisError("diagnosis inputs must be objects")
+    for name, value in (
+        ("source_run_id", source_run_id),
+        ("followup_run_id", followup_run_id),
+    ):
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value <= 0
+        ):
+            raise TrustedSourceDiagnosisError(f"{name} must be a positive integer")
+    if source_run_id == followup_run_id:
+        raise TrustedSourceDiagnosisError(
+            "source and follow-up run IDs must identify different workflow runs"
+        )
 
     if first["target_origin"] != second["target_origin"]:
         raise TrustedSourceDiagnosisError("trusted-source observations target different origins")
@@ -110,6 +130,8 @@ def derive_diagnosis(original: Any, followup: Any) -> dict[str, Any]:
         "workflow_source_git_sha": first["workflow_source_git_sha"],
         "github_deployment_id": original_event["github_deployment_id"],
         "github_deployment_status_id": original_event["github_deployment_status_id"],
+        "source_run_id": source_run_id,
+        "followup_run_id": followup_run_id,
         "original_outcome": first["outcome"],
         "followup_outcome": second["outcome"],
         "original_event_name": original_event_name,
@@ -154,7 +176,12 @@ def _self_test() -> None:
     )
     followup = _signed(followup)
 
-    result = derive_diagnosis(original, followup)
+    result = derive_diagnosis(
+        original,
+        followup,
+        source_run_id=123,
+        followup_run_id=456,
+    )
     assert result["status"] == "PROVIDER_CONFIGURATION_REQUIRED"
     assert result["finding"] == "EVENT_CONTEXT_NOT_ROOT_CAUSE"
     assert len(result["diagnosis_sha256"]) == 64
@@ -174,6 +201,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("original", nargs="?", type=Path)
     parser.add_argument("followup", nargs="?", type=Path)
+    parser.add_argument("--source-run-id", type=int, default=0)
+    parser.add_argument("--followup-run-id", type=int, default=0)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
@@ -185,7 +214,12 @@ def main() -> int:
         parser.error("original, followup, and --output are required")
 
     try:
-        diagnosis = derive_diagnosis(_load(args.original), _load(args.followup))
+        diagnosis = derive_diagnosis(
+            _load(args.original),
+            _load(args.followup),
+            source_run_id=args.source_run_id,
+            followup_run_id=args.followup_run_id,
+        )
     except TrustedSourceDiagnosisError as exc:
         print(f"trusted-source capability diagnosis FAILED: {exc}", file=sys.stderr)
         return 1
