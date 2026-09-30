@@ -1,14 +1,15 @@
 """Collect and independently verify one authenticated ProofOS observation.
 
-Live mode requires two caller-controlled environment variables:
+Live mode requires three caller-controlled environment variables:
 - PROOFOS_E2E_CALLER_ID_TOKEN: short-lived Google OIDC ID token for the collector
 - PROOFOS_E2E_COLLECTOR_PUBLIC_KEY: trusted base64 Ed25519 collector public key
+- VERCEL_TRUSTED_OIDC_TOKEN: short-lived GitHub Actions OIDC token for Vercel Trusted Sources
 
-Neither value is accepted on the command line, written to artifacts, or logged.
+No credential is accepted on the command line, written to artifacts, or logged.
 The public key is configuration, never discovered from the collector under test.
-When Vercel Deployment Protection is enabled, VERCEL_AUTOMATION_BYPASS_SECRET
-may be supplied. It is used only as the official edge-bypass request header and
-is never persisted or printed.
+Vercel edge authentication and ProofOS application authentication deliberately use
+different short-lived identities. Static Deployment Protection bypass secrets are
+not accepted by this harness.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ PROFILE_ID = "runtime-health-v1"
 EVIDENCE_KIND = "runtime"
 TOKEN_ENV = "PROOFOS_E2E_CALLER_ID_TOKEN"
 PUBLIC_KEY_ENV = "PROOFOS_E2E_COLLECTOR_PUBLIC_KEY"
-VERCEL_BYPASS_ENV = "VERCEL_AUTOMATION_BYPASS_SECRET"
+VERCEL_TRUSTED_OIDC_ENV = "VERCEL_TRUSTED_OIDC_TOKEN"
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_ATTESTATION_AGE_SECONDS = 120.0
 
@@ -86,9 +87,10 @@ def _sha256(value: dict[str, Any]) -> str:
     ).hexdigest()
 
 
-def _load_secret_environment() -> tuple[str, str]:
+def _load_secret_environment() -> tuple[str, str, str]:
     token = os.environ.get(TOKEN_ENV, "").strip()
     public_key = os.environ.get(PUBLIC_KEY_ENV, "").strip()
+    trusted_oidc = os.environ.get(VERCEL_TRUSTED_OIDC_ENV, "").strip()
     if not token:
         raise AuthenticatedCollectionError(
             f"{TOKEN_ENV} is required for live authenticated collection"
@@ -97,7 +99,23 @@ def _load_secret_environment() -> tuple[str, str]:
         raise AuthenticatedCollectionError(
             f"{PUBLIC_KEY_ENV} is required for live signature verification"
         )
-    return token, public_key
+    if not trusted_oidc:
+        raise AuthenticatedCollectionError(
+            f"{VERCEL_TRUSTED_OIDC_ENV} is required for Vercel edge authentication"
+        )
+    return token, public_key, trusted_oidc
+
+
+def _request_headers(*, bearer_token: str, trusted_oidc: str) -> dict[str, str]:
+    if not bearer_token.strip() or not trusted_oidc.strip():
+        raise AuthenticatedCollectionError("short-lived request identities are missing")
+    return {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {bearer_token}",
+        "User-Agent": "proofos-authenticated-e2e/2",
+        "x-vercel-trusted-oidc-idp-token": trusted_oidc,
+    }
 
 
 def _request_json(
@@ -105,23 +123,17 @@ def _request_json(
     payload: dict[str, Any],
     *,
     bearer_token: str,
+    trusted_oidc: str,
     timeout: float,
 ) -> dict[str, Any]:
     request = Request(
         f"{origin}/v1/collect",
         data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
         method="POST",
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {bearer_token}",
-            "User-Agent": "proofos-authenticated-e2e/1",
-            **(
-                {"x-vercel-protection-bypass": os.environ[VERCEL_BYPASS_ENV].strip()}
-                if os.environ.get(VERCEL_BYPASS_ENV, "").strip()
-                else {}
-            ),
-        },
+        headers=_request_headers(
+            bearer_token=bearer_token,
+            trusted_oidc=trusted_oidc,
+        ),
     )
     try:
         with urlopen(request, timeout=timeout) as response:
@@ -244,7 +256,7 @@ def observe(
 ) -> dict[str, Any]:
     origin = _origin(origin)
     source_sha = _git_sha(expected_git_sha)
-    bearer_token, public_key = _load_secret_environment()
+    bearer_token, public_key, trusted_oidc = _load_secret_environment()
 
     execution_id = f"e2e-{uuid4().hex}"
     task_id = f"E2E-{uuid4().hex[:16]}"
@@ -261,6 +273,7 @@ def observe(
         origin,
         request_payload,
         bearer_token=bearer_token,
+        trusted_oidc=trusted_oidc,
         timeout=timeout,
     )
     attestation, tamper = verify_attestation_payload(
@@ -299,7 +312,7 @@ def observe(
             "proves nonce and profile tampering invalidate the signature",
             "does not by itself promote the observed outcome into a ProofOS VERIFIED execution",
             "retains the one-time nonce and signed attestation for independent replay-safe audit",
-            "does not expose bearer tokens, private signing keys, or trusted public-key configuration",
+            "does not expose Google bearer tokens, GitHub OIDC edge tokens, private signing keys, or trusted public-key configuration",
         ],
     }
     return {**unsigned, "evidence_sha256": _sha256(unsigned)}
@@ -337,6 +350,14 @@ def _self_test() -> None:
         "nonce_tamper_rejected": True,
         "profile_tamper_rejected": True,
     }
+
+    headers = _request_headers(
+        bearer_token="google-short-lived",
+        trusted_oidc="github-short-lived",
+    )
+    assert headers["Authorization"] == "Bearer google-short-lived"
+    assert headers["x-vercel-trusted-oidc-idp-token"] == "github-short-lived"
+    assert "x-vercel-protection-bypass" not in headers
 
     wrong_key = AttestationSigner.generate("collector-http-v1").public_key_b64()
     try:
