@@ -122,7 +122,12 @@ bundle.
 The credential-free `authorize` job resolves the source run ID and Git SHA from
 the immutable `workflow_run` event, re-checks the source workflow identity with
 the GitHub API, downloads the sealed bundle, and independently verifies the launch
-verdict. A `HOLD` verdict is a normal green authorization result with
+verdict. Source artifacts are fetched by `download_run_artifact.py`, which
+validates the exact run-scoped artifact identity and uses bounded backoff for the
+short GitHub/Azure artifact replication window instead of treating an immediately
+unavailable blob as a launch failure. The helper accepts only one bounded JSON
+payload and never forwards the GitHub Authorization header to the blob host.
+A `HOLD` verdict is a normal green authorization result with
 `authorized=false`; the `privileged-e2e` job is skipped and no GitHub OIDC token
 is minted. Only `READY_FOR_AUTHENTICATED_E2E` produces `authorized=true`.
 
