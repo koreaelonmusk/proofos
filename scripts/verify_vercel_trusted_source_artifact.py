@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import sys
 from typing import Any
@@ -12,6 +13,7 @@ from urllib.parse import urlsplit
 
 SCHEMA_VERSION = 1
 KIND = "vercel-trusted-source-observation"
+TRUSTED_SOURCE_ERROR_RE = re.compile(r"^TRUSTED_SOURCES_[A-Z0-9_]{1,80}$")
 OUTCOMES = {
     "TRUSTED_SOURCE_REJECTED",
     "TRUSTED_SOURCE_ACCEPTED_READY",
@@ -154,6 +156,8 @@ def verify_evidence(value: Any) -> dict[str, Any]:
     expected_keys = set(common)
     if outcome == "TRUSTED_SOURCE_REJECTED":
         expected_keys.add("http_status")
+        if "vercel_error_code" in value:
+            expected_keys.add("vercel_error_code")
     else:
         expected_keys.update({"health", "readiness"})
 
@@ -193,6 +197,12 @@ def verify_evidence(value: Any) -> dict[str, Any]:
     if outcome == "TRUSTED_SOURCE_REJECTED":
         if value.get("http_status") not in {401, 403}:
             raise TrustedSourceArtifactError("rejected outcome requires HTTP 401/403")
+        code = value.get("vercel_error_code")
+        if code is not None and (
+            not isinstance(code, str)
+            or TRUSTED_SOURCE_ERROR_RE.fullmatch(code) is None
+        ):
+            raise TrustedSourceArtifactError("trusted-source error code is invalid")
     else:
         _health(value.get("health"), origin=origin, sha=sha)
         expected_ready = (
@@ -244,6 +254,7 @@ def _self_test() -> None:
     rejected.update(
         {
             "http_status": 401,
+            "vercel_error_code": "TRUSTED_SOURCES_OIDC_DISCOVERY_FAILED",
             "claim_boundary": [
                 "proves the Vercel edge did not accept this GitHub Actions OIDC request",
                 "does not reveal or persist the OIDC token",

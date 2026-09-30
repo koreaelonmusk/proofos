@@ -130,7 +130,10 @@ workflow artifacts, or logs.
 The diagnostic records one of:
 
 - `TRUSTED_SOURCE_REJECTED`: Vercel's edge still returned 401/403. This is a
-  configuration observation, not an application failure.
+  configuration observation, not an application failure. When Vercel returns a
+  bounded machine code in the `TRUSTED_SOURCES_*` namespace, the evidence may
+  include only that code as `vercel_error_code`. Raw response bodies, provider
+  messages, request metadata, and OIDC tokens are never persisted.
 - `TRUSTED_SOURCE_ACCEPTED_NOT_READY`: edge authentication succeeded and
   application readiness was reached, but ProofOS intentionally remained not-ready.
 - `TRUSTED_SOURCE_ACCEPTED_READY`: edge authentication and application
