@@ -119,6 +119,11 @@ def validate() -> list[str]:
         "source_git_sha: ${{ steps.authorize.outputs.source_git_sha }}",
         "authorization_basis: ${{ steps.authorize.outputs.authorization_basis }}",
         "trusted_promotion_sha256: ${{ steps.authorize.outputs.trusted_promotion_sha256 }}",
+        "Build and independently verify Trust Pipeline Receipt",
+        "build_trust_pipeline_receipt.py",
+        "verify_trust_pipeline_receipt.py",
+        "proofos-trust-authorization-",
+        "proofos-trust-pipeline-receipt-",
         'echo "authorized=$authorized" >> "$GITHUB_OUTPUT"',
     )
     for snippet in required_authorize:
@@ -194,6 +199,7 @@ def main() -> int:
     print("- static Vercel bypass secret, stored caller token, and service-account JSON: forbidden")
     print("- automatic trigger: successful main-branch Trusted Source follow-up only")
     print("- public HOLD: promotable only from run-bound same-run Trusted Source READY + anonymous-denied proof")
+    print("- authorization decision: sealed in an independently verified Trust Pipeline Receipt")
     print("- authenticated collection: cross-checked against sealed launch bundle")
     return 0
 
