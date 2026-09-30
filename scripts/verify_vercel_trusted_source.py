@@ -9,6 +9,7 @@ persisting the token.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -25,6 +26,22 @@ SCHEMA_VERSION = 1
 KIND = "vercel-trusted-source-observation"
 MAX_BODY = 64 * 1024
 TRUSTED_SOURCE_ERROR_RE = re.compile(r"^TRUSTED_SOURCES_[A-Z0-9_]{1,80}$")
+OIDC_CLAIM_KEYS = (
+    "iss",
+    "aud",
+    "sub",
+    "repository",
+    "repository_id",
+    "repository_owner",
+    "repository_owner_id",
+    "ref",
+    "ref_type",
+    "workflow",
+    "workflow_ref",
+    "workflow_sha",
+    "event_name",
+    "runner_environment",
+)
 
 
 class TrustedSourceProbeError(RuntimeError):
@@ -90,6 +107,40 @@ def _event_binding(
         "environment_url": _origin(environment_url),
         "source_git_sha": _git_sha(source_git_sha),
     }
+
+
+def _oidc_claim_projection(token: str) -> dict[str, str]:
+    """Decode a minimal diagnostic projection without using it for authorization."""
+
+    parts = token.strip().split(".")
+    if len(parts) != 3:
+        raise TrustedSourceProbeError("GitHub OIDC token is not a JWT")
+    payload = parts[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(payload.encode("ascii"))
+        claims = json.loads(decoded.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise TrustedSourceProbeError("GitHub OIDC payload could not be decoded") from exc
+    if not isinstance(claims, dict):
+        raise TrustedSourceProbeError("GitHub OIDC payload is not an object")
+
+    projected: dict[str, str] = {}
+    for key in OIDC_CLAIM_KEYS:
+        value = claims.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value or len(value) > 600:
+            raise TrustedSourceProbeError(f"GitHub OIDC claim {key} is invalid")
+        projected[key] = value
+
+    if projected.get("iss") != "https://token.actions.githubusercontent.com":
+        raise TrustedSourceProbeError("GitHub OIDC issuer is unexpected")
+    if projected.get("repository") != "koreaelonmusk/proofos":
+        raise TrustedSourceProbeError("GitHub OIDC repository claim is unexpected")
+    if "aud" not in projected or "sub" not in projected:
+        raise TrustedSourceProbeError("GitHub OIDC audience/subject claims are missing")
+    return projected
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -252,6 +303,7 @@ def observe(
             "source SHA does not match deployment event source SHA"
         )
 
+    oidc_claims = _oidc_claim_projection(oidc_token)
     headers = _headers(oidc_token)
     health_status, health_payload = _request_json(
         f"{origin}/healthz",
@@ -271,6 +323,7 @@ def observe(
                 "deployment_event": deployment_event,
                 "outcome": "TRUSTED_SOURCE_REJECTED",
                 "http_status": health_status,
+                "oidc_claims": oidc_claims,
                 **(
                     {"vercel_error_code": health_payload["vercel_error_code"]}
                     if isinstance(health_payload, dict)
@@ -327,6 +380,7 @@ def observe(
             "workflow_source_git_sha": _git_sha(source_git_sha),
             "deployment_event": deployment_event,
             "outcome": outcome,
+            "oidc_claims": oidc_claims,
             "health": health,
             "readiness": readiness,
             "claim_boundary": [
@@ -353,6 +407,28 @@ def _self_test() -> None:
     assert _origin(origin + "/") == origin
     assert _git_sha(sha.upper()) == sha
     assert _headers("opaque-token")["x-vercel-trusted-oidc-idp-token"] == "opaque-token"
+    fake_claims = {
+        "iss": "https://token.actions.githubusercontent.com",
+        "aud": "https://github.com/koreaelonmusk",
+        "sub": "repo:koreaelonmusk/proofos:ref:refs/heads/main",
+        "repository": "koreaelonmusk/proofos",
+        "repository_id": "1341515802",
+        "repository_owner": "koreaelonmusk",
+        "repository_owner_id": "44775845",
+        "ref": "refs/heads/main",
+        "ref_type": "branch",
+        "workflow": "Vercel Live Smoke Evidence",
+        "workflow_ref": "koreaelonmusk/proofos/.github/workflows/vercel-live-smoke.yml@refs/heads/main",
+        "workflow_sha": sha,
+        "event_name": "deployment_status",
+        "runner_environment": "github-hosted",
+    }
+    payload = base64.urlsafe_b64encode(
+        json.dumps(fake_claims, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    projected = _oidc_claim_projection(f"e30.{payload}.sig")
+    assert projected["aud"] == "https://github.com/koreaelonmusk"
+    assert projected["ref"] == "refs/heads/main"
     assert (
         _trusted_source_error_code(
             b'{"error":{"code":"TRUSTED_SOURCES_OIDC_DISCOVERY_FAILED","message":"secret detail"}}'
