@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -23,6 +24,7 @@ from urllib.request import Request, urlopen
 SCHEMA_VERSION = 1
 KIND = "vercel-trusted-source-observation"
 MAX_BODY = 64 * 1024
+TRUSTED_SOURCE_ERROR_RE = re.compile(r"^TRUSTED_SOURCES_[A-Z0-9_]{1,80}$")
 
 
 class TrustedSourceProbeError(RuntimeError):
@@ -108,6 +110,45 @@ def _read_json(raw: bytes, *, label: str) -> Any:
         raise TrustedSourceProbeError(f"{label} did not return valid JSON") from exc
 
 
+def _trusted_source_error_code(raw: bytes) -> str | None:
+    """Extract only a bounded Vercel Trusted Sources error code.
+
+    Rejection bodies can contain provider messages or request metadata. None of
+    that is evidence-safe. Parse JSON opportunistically and retain only a stable
+    code with the documented TRUSTED_SOURCES_* namespace.
+    """
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+    def visit(value: Any, depth: int = 0) -> str | None:
+        if depth > 4:
+            return None
+        if isinstance(value, dict):
+            for key in ("code", "errorCode", "error_code"):
+                candidate = value.get(key)
+                if (
+                    isinstance(candidate, str)
+                    and TRUSTED_SOURCE_ERROR_RE.fullmatch(candidate.strip())
+                ):
+                    return candidate.strip()
+            for key in ("error", "details", "cause"):
+                if key in value:
+                    found = visit(value[key], depth + 1)
+                    if found:
+                        return found
+        elif isinstance(value, list):
+            for item in value[:8]:
+                found = visit(item, depth + 1)
+                if found:
+                    return found
+        return None
+
+    return visit(payload)
+
+
 def _health(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict) or set(payload) != {"status", "service", "runtime"}:
         raise TrustedSourceProbeError("health response schema drifted")
@@ -173,7 +214,7 @@ def _request_json(
         if exc.code in accepted_error_statuses:
             return exc.code, _read_json(raw, label=urlsplit(url).path or "/")
         if exc.code in {401, 403}:
-            return exc.code, None
+            return exc.code, {"vercel_error_code": _trusted_source_error_code(raw)}
         raise TrustedSourceProbeError(
             f"trusted-source request returned unexpected HTTP {exc.code}"
         ) from exc
@@ -230,6 +271,12 @@ def observe(
                 "deployment_event": deployment_event,
                 "outcome": "TRUSTED_SOURCE_REJECTED",
                 "http_status": health_status,
+                **(
+                    {"vercel_error_code": health_payload["vercel_error_code"]}
+                    if isinstance(health_payload, dict)
+                    and health_payload.get("vercel_error_code")
+                    else {}
+                ),
                 "claim_boundary": [
                     "proves the Vercel edge did not accept this GitHub Actions OIDC request",
                     "does not reveal or persist the OIDC token",
@@ -306,6 +353,14 @@ def _self_test() -> None:
     assert _origin(origin + "/") == origin
     assert _git_sha(sha.upper()) == sha
     assert _headers("opaque-token")["x-vercel-trusted-oidc-idp-token"] == "opaque-token"
+    assert (
+        _trusted_source_error_code(
+            b'{"error":{"code":"TRUSTED_SOURCES_OIDC_DISCOVERY_FAILED","message":"secret detail"}}'
+        )
+        == "TRUSTED_SOURCES_OIDC_DISCOVERY_FAILED"
+    )
+    assert _trusted_source_error_code(b'{"code":"SOME_OTHER_ERROR"}') is None
+    assert _trusted_source_error_code(b"not-json") is None
 
     for invalid in (
         "http://proofos.vercel.app",
