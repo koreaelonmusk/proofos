@@ -39,6 +39,7 @@ PRIVILEGED_REQUIRED = (
     "build_trusted_promotion_proof.py",
     "verify_trusted_promotion_proof.py",
     "AUTHORIZED_PROMOTION_SHA: ${{ needs.authorize.outputs.trusted_promotion_sha256 }}",
+    '--source-run-id "$SOURCE_RUN_ID"',
 )
 FORBIDDEN_GLOBAL = (
     "secrets.PROOFOS_E2E_CALLER_ID_TOKEN",
@@ -106,6 +107,7 @@ def validate() -> list[str]:
         "uv run python scripts/authorize_authenticated_e2e.py",
         "--trusted-source",
         "--trusted-promotion",
+        '--source-run-id "$SOURCE_RUN_ID"',
         "authorized: ${{ steps.authorize.outputs.authorized }}",
         "target_origin: ${{ steps.authorize.outputs.target_origin }}",
         "source_git_sha: ${{ steps.authorize.outputs.source_git_sha }}",
@@ -183,7 +185,7 @@ def main() -> int:
     print("- ProofOS caller: short-lived Google WIF ID token only")
     print("- static Vercel bypass secret, stored caller token, and service-account JSON: forbidden")
     print("- automatic trigger: successful main-branch live evidence only")
-    print("- public HOLD: promotable only from same-run Trusted Source READY + anonymous-denied proof")
+    print("- public HOLD: promotable only from run-bound same-run Trusted Source READY + anonymous-denied proof")
     print("- authenticated collection: cross-checked against sealed launch bundle")
     return 0
 
