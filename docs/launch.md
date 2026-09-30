@@ -91,10 +91,16 @@ that the supplied source run is a successfully completed
 SHA, downloads the sealed health/trust/manifest/verdict artifacts, and
 independently re-verifies the bundle.
 
-Only a verdict of `READY_FOR_AUTHENTICATED_E2E`, bound to the exact requested
-Vercel origin and source SHA, produces the authorization output required to
-create the second `privileged-e2e` job. A `HOLD` result means the OIDC-capable
-job never runs.
+A direct verdict of `READY_FOR_AUTHENTICATED_E2E`, bound to the exact
+requested Vercel origin and source SHA, authorizes the second
+`privileged-e2e` job. A public `HOLD` can also authorize that next evidence
+step only through a separate Trusted Promotion Proof. The proof is valid only
+when the public HOLD is caused solely by Vercel Deployment Protection blocking
+both public observations and a same-run Trusted Source independently proves
+`TRUSTED_SOURCE_ACCEPTED_READY_AND_ANONYMOUS_DENIED` for the exact same
+origin, Git SHA, GitHub deployment ID, deployment-status ID, production
+environment, and main live-workflow identity. The public verdict itself remains
+HOLD and is never rewritten.
 
 The `privileged-e2e` job alone has `id-token: write`. After authorization,
 GitHub OIDC is exchanged through Google Workload Identity Federation for a
@@ -184,6 +190,41 @@ form. ProofOS accepts only the two exact repository-bound shapes: the legacy
 separately verified `repository_owner_id` and `repository_id` claims. Arbitrary
 owner/repository IDs or broader subject prefixes are rejected.
 
+### Trusted Promotion Proof
+
+`build_trusted_promotion_proof.py` is a narrow authority bridge, not a second
+launch verdict. It consumes five independently verifiable inputs from one
+`Vercel Live Smoke Evidence` run: public health, public trust, the sealed
+manifest, the public launch verdict, and the Trusted Source artifact.
+
+It emits `AUTHORIZED_FOR_AUTHENTICATED_E2E` only when all of the following are
+true:
+
+- the public verdict is exactly `HOLD`;
+- both public health and trust outcomes are
+  `BLOCKED_BY_DEPLOYMENT_PROTECTION`;
+- the HOLD has no readiness/configuration reason outside the edge-protection
+  boundary;
+- the Trusted Source outcome is exactly
+  `TRUSTED_SOURCE_ACCEPTED_READY_AND_ANONYMOUS_DENIED`;
+- both evidence planes bind the same origin, full Git SHA, deployment ID,
+  deployment-status ID, and production environment;
+- the Trusted Source OIDC projection is bound to the main
+  `vercel-live-smoke.yml` deployment-status workflow.
+
+The proof contains only hashes, deployment identity, bounded outcomes, and the
+next-evidence scope. It never contains either OIDC token. The independent
+`verify_trusted_promotion_proof.py` re-derives the proof from all five
+constituents instead of trusting the producer.
+
+The credential-free authorization job creates and independently verifies this
+proof before it may return `authorized=true`. The privileged job then
+downloads the original source-run artifacts again, rebuilds the Trusted
+Promotion Proof from scratch, and requires the rebuilt SHA-256 to equal the hash
+authorized by the credential-free job before minting either short-lived
+identity. This prevents an authorization-time proof from being swapped before
+use.
+
 ### Automatic authenticated-E2E promotion
 
 The workflow also subscribes to completed `Vercel Live Smoke Evidence` runs.
@@ -200,9 +241,11 @@ validates the exact run-scoped artifact identity and uses bounded backoff for th
 short GitHub/Azure artifact replication window instead of treating an immediately
 unavailable blob as a launch failure. The helper accepts only one bounded JSON
 payload and never forwards the GitHub Authorization header to the blob host.
-A `HOLD` verdict is a normal green authorization result with
-`authorized=false`; the `privileged-e2e` job is skipped and no GitHub OIDC token
-is minted. Only `READY_FOR_AUTHENTICATED_E2E` produces `authorized=true`.
+A `HOLD` verdict remains a normal green public result. It produces
+`authorized=false` unless the same source run also contains a valid Trusted
+Promotion Proof. Direct `READY_FOR_AUTHENTICATED_E2E` and a verified Trusted
+Promotion Proof are the only two paths to `authorized=true`. Neither path is a
+production GO decision.
 
 Manual dispatch remains available for controlled recovery and debugging, but the
 same source-run identity, main-branch, artifact, origin, SHA, and verdict checks
