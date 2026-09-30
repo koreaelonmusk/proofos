@@ -47,7 +47,7 @@ jobs:
             --url "$DEPLOYMENT_URL" \
             --output "artifacts/live-smoke/vercel-${{ github.run_id }}.json" \
             --record-protection-block \
-            --expected-git-sha "$GITHUB_SHA" \
+            --expected-git-sha "${{ needs.trusted-source-authorize.outputs.source_git_sha }}" \
             --github-deployment-id "${{ github.event.deployment.id }}" \
             --github-deployment-status-id "${{ github.event.deployment_status.id }}" \
             --github-environment "${{ github.event.deployment.environment }}" \
@@ -143,10 +143,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  trusted-source:
+  trusted-source-authorize:
     if: >-
       github.event.deployment_status.state == 'success' &&
-      github.event.deployment.ref == 'main' &&
       (
         github.event.deployment.environment == 'Production' ||
         github.event.deployment.environment == 'production'
@@ -155,6 +154,66 @@ jobs:
         contains(github.event.deployment_status.environment_url, '.vercel.app') ||
         contains(github.event.deployment_status.target_url, '.vercel.app')
       )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      authorized: ${{ steps.authorize.outputs.authorized }}
+      source_git_sha: ${{ steps.authorize.outputs.source_git_sha }}
+      deployment_url: ${{ steps.authorize.outputs.deployment_url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Authorize trusted-source production deployment
+        id: authorize
+        shell: bash
+        env:
+          DEPLOYMENT_SHA: ${{ github.event.deployment.sha }}
+          ENVIRONMENT_URL: ${{ github.event.deployment_status.environment_url }}
+          TARGET_URL: ${{ github.event.deployment_status.target_url }}
+        run: |
+          set -euo pipefail
+          sha="${DEPLOYMENT_SHA,,}"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "deployment SHA is not a full Git commit SHA"
+            exit 1
+          }
+
+          url="$ENVIRONMENT_URL"
+          if [[ "$url" != *".vercel.app"* ]]; then
+            url="$TARGET_URL"
+          fi
+          [[ "$url" == https://*.vercel.app || "$url" == https://*.vercel.app/ ]] || {
+            echo "trusted-source target is not an exact Vercel deployment origin"
+            exit 1
+          }
+          url="${url%/}"
+
+          git fetch --no-tags origin main
+          git cat-file -e "$sha^{commit}" || {
+            echo "deployment SHA is not available in repository history"
+            exit 1
+          }
+
+          if git merge-base --is-ancestor "$sha" origin/main; then
+            echo "authorized=true" >> "$GITHUB_OUTPUT"
+            echo "source_git_sha=$sha" >> "$GITHUB_OUTPUT"
+            echo "deployment_url=$url" >> "$GITHUB_OUTPUT"
+            echo "trusted-source deployment is contained in main history"
+          else
+            echo "authorized=false" >> "$GITHUB_OUTPUT"
+            echo "source_git_sha=$sha" >> "$GITHUB_OUTPUT"
+            echo "deployment_url=$url" >> "$GITHUB_OUTPUT"
+            echo "trusted-source deployment is not contained in main history"
+          fi
+
+  trusted-source:
+    needs: trusted-source-authorize
+    if: needs.trusted-source-authorize.outputs.authorized == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -170,19 +229,14 @@ jobs:
         id: deployment
         shell: bash
         env:
-          ENVIRONMENT_URL: ${{ github.event.deployment_status.environment_url }}
-          TARGET_URL: ${{ github.event.deployment_status.target_url }}
+          AUTHORIZED_URL: ${{ needs.trusted-source-authorize.outputs.deployment_url }}
         run: |
           set -euo pipefail
-          url="$ENVIRONMENT_URL"
-          if [[ "$url" != *".vercel.app"* ]]; then
-            url="$TARGET_URL"
-          fi
-          [[ "$url" == https://*.vercel.app || "$url" == https://*.vercel.app/ ]] || {
-            echo "trusted-source target is not an exact Vercel deployment origin"
+          [[ "$AUTHORIZED_URL" == https://*.vercel.app ]] || {
+            echo "authorized trusted-source origin is invalid"
             exit 1
           }
-          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "url=$AUTHORIZED_URL" >> "$GITHUB_OUTPUT"
 
       - name: Mint short-lived GitHub OIDC identity
         id: oidc
