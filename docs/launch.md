@@ -155,6 +155,12 @@ diagnostic only. It is not used as authorization input. The independent artifact
 verifier requires the GitHub Actions issuer, the ProofOS repository, and the
 default repository-owner audience before accepting the projection.
 
+GitHub may emit either the legacy repository subject prefix or its immutable-ID
+form. ProofOS accepts only the two exact repository-bound shapes: the legacy
+`repo:koreaelonmusk/proofos:` prefix, or an immutable prefix derived from the
+separately verified `repository_owner_id` and `repository_id` claims. Arbitrary
+owner/repository IDs or broader subject prefixes are rejected.
+
 ### Automatic authenticated-E2E promotion
 
 The workflow also subscribes to completed `Vercel Live Smoke Evidence` runs.
