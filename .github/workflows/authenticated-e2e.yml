@@ -162,6 +162,7 @@ jobs:
             "$verdict" \
             "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json" \
             --expected-git-sha "$EXPECTED_GIT_SHA" \
+            --source-run-id "$SOURCE_RUN_ID" \
             --output "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json"
 
           uv run python scripts/verify_trusted_promotion_proof.py \
@@ -171,7 +172,8 @@ jobs:
             "$verdict" \
             "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json" \
             "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json" \
-            --expected-git-sha "$EXPECTED_GIT_SHA"
+            --expected-git-sha "$EXPECTED_GIT_SHA" \
+            --source-run-id "$SOURCE_RUN_ID"
 
           echo "available=true" >> "$GITHUB_OUTPUT"
 
@@ -191,6 +193,7 @@ jobs:
             "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"
             --expected-git-sha "$EXPECTED_GIT_SHA"
             --deployment-url "$DEPLOYMENT_URL"
+            --source-run-id "$SOURCE_RUN_ID"
           )
           if [[ -f "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json" ]]; then
             args+=(
@@ -290,6 +293,7 @@ jobs:
             "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json" \
             "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json" \
             --expected-git-sha "$EXPECTED_GIT_SHA" \
+            --source-run-id "$SOURCE_RUN_ID" \
             --output "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json"
 
           uv run python scripts/verify_trusted_promotion_proof.py \
@@ -299,7 +303,8 @@ jobs:
             "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json" \
             "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json" \
             "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json" \
-            --expected-git-sha "$EXPECTED_GIT_SHA"
+            --expected-git-sha "$EXPECTED_GIT_SHA" \
+            --source-run-id "$SOURCE_RUN_ID"
 
           rebuilt="$(jq -r '.promotion_sha256' "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json")"
           test -n "$AUTHORIZED_PROMOTION_SHA"
@@ -357,6 +362,7 @@ jobs:
             "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"
             "artifacts/authenticated-e2e/collection-${{ github.run_id }}.json"
             --expected-git-sha "$EXPECTED_GIT_SHA"
+            --source-run-id "$SOURCE_RUN_ID"
             --output "artifacts/authenticated-e2e/promotion-${{ github.run_id }}.json"
           )
           if [[ -f "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json" ]]; then
