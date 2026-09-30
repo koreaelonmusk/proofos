@@ -35,6 +35,10 @@ PRIVILEGED_REQUIRED = (
     "const token = await core.getIDToken();",
     "core.setSecret(token);",
     "verify_authenticated_e2e_promotion.py",
+    "- name: Independently rebuild authorized Trusted Promotion Proof",
+    "build_trusted_promotion_proof.py",
+    "verify_trusted_promotion_proof.py",
+    "AUTHORIZED_PROMOTION_SHA: ${{ needs.authorize.outputs.trusted_promotion_sha256 }}",
 )
 FORBIDDEN_GLOBAL = (
     "secrets.PROOFOS_E2E_CALLER_ID_TOKEN",
@@ -94,11 +98,19 @@ def validate() -> list[str]:
         "Verify source evidence workflow identity",
         "Download sealed launch bundle with bounded retry",
         "uv run python scripts/download_run_artifact.py",
+        "- name: Build Trusted Promotion Proof when public observer is HOLD",
+        "--artifact \"vercel-trusted-source-$SOURCE_RUN_ID.json\"",
+        "build_trusted_promotion_proof.py",
+        "verify_trusted_promotion_proof.py",
         "- name: Authorize privileged authenticated E2E",
         "uv run python scripts/authorize_authenticated_e2e.py",
+        "--trusted-source",
+        "--trusted-promotion",
         "authorized: ${{ steps.authorize.outputs.authorized }}",
         "target_origin: ${{ steps.authorize.outputs.target_origin }}",
         "source_git_sha: ${{ steps.authorize.outputs.source_git_sha }}",
+        "authorization_basis: ${{ steps.authorize.outputs.authorization_basis }}",
+        "trusted_promotion_sha256: ${{ steps.authorize.outputs.trusted_promotion_sha256 }}",
         'echo "authorized=$authorized" >> "$GITHUB_OUTPUT"',
     )
     for snippet in required_authorize:
@@ -128,17 +140,29 @@ def validate() -> list[str]:
     gate = authorize.find("- name: Authorize privileged authenticated E2E")
     source = authorize.find("Verify source evidence workflow identity")
     download = authorize.find("Download sealed launch bundle with bounded retry")
-    if min(gate, source, download) < 0 or not (source < download < gate):
-        issues.append("source_identity_and_bundle_must_precede_authorization")
+    trusted_promotion = authorize.find(
+        "- name: Build Trusted Promotion Proof when public observer is HOLD"
+    )
+    if min(gate, source, download, trusted_promotion) < 0 or not (
+        source < download < trusted_promotion < gate
+    ):
+        issues.append(
+            "source_bundle_and_trusted_promotion_must_precede_authorization"
+        )
 
+    rebuild = privileged.find(
+        "- name: Independently rebuild authorized Trusted Promotion Proof"
+    )
     edge_oidc = privileged.find("- name: Mint short-lived Vercel Trusted Source identity")
     auth = privileged.find("uses: google-github-actions/auth@v3")
     collect = privileged.find("- name: Collect fresh authenticated signed evidence")
     promotion = privileged.find("- name: Cross-check authenticated evidence against sealed launch bundle")
-    if min(edge_oidc, auth, collect, promotion) < 0 or not (
-        edge_oidc < auth < collect < promotion
+    if min(rebuild, edge_oidc, auth, collect, promotion) < 0 or not (
+        rebuild < edge_oidc < auth < collect < promotion
     ):
-        issues.append("edge_oidc_then_google_oidc_then_collection_then_promotion_order_required")
+        issues.append(
+            "trusted_rebuild_then_edge_oidc_then_google_oidc_then_collection_then_promotion_order_required"
+        )
 
     return issues
 
@@ -154,12 +178,12 @@ def main() -> int:
     print("Authenticated E2E workflow contract OK")
     print("- authorization job: no secrets, no OIDC permission")
     print("- sealed source run and evidence bundle: verified before authorization")
-    print("- privileged job: created only after READY authorization")
+    print("- privileged job: created only after direct READY or verified Trusted Promotion Proof")
     print("- Vercel edge: short-lived GitHub OIDC Trusted Source identity only")
     print("- ProofOS caller: short-lived Google WIF ID token only")
     print("- static Vercel bypass secret, stored caller token, and service-account JSON: forbidden")
     print("- automatic trigger: successful main-branch live evidence only")
-    print("- HOLD: safe green authorization result; privileged job stays skipped")
+    print("- public HOLD: promotable only from same-run Trusted Source READY + anonymous-denied proof")
     print("- authenticated collection: cross-checked against sealed launch bundle")
     return 0
 
