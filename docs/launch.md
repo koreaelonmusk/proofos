@@ -303,6 +303,25 @@ rerun from becoming an admission ticket. Manual recovery remains available and
 continues to accept an explicitly supplied live-evidence run ID, but the
 automatic path is strictly sequential.
 
+### Trust Pipeline Receipt
+
+Every Authenticated E2E authorization decision now emits a separate
+`proofos-trust-pipeline-receipt`. The receipt is evidence, not authority. It
+binds the original live-smoke run, optional Trusted Source follow-up run, current
+Authenticated E2E run, deployment identity, Git SHA, manifest/verdict hashes,
+authorization basis, optional Trusted Promotion hash, and provider diagnosis
+hash into one canonical SHA-256.
+
+Automatic receipts require the already independently verified provider diagnosis
+and therefore bind all three workflow layers:
+
+`source_run_id -> followup_run_id -> e2e_run_id`.
+
+Manual recovery receipts are explicitly labeled `manual_recovery` and do not
+pretend a follow-up diagnosis exists. The authorization result is persisted
+separately and hashed into the receipt so an operator can independently
+re-derive the exact decision without trusting workflow logs.
+
 ### Automatic authenticated-E2E promotion
 
 The workflow also subscribes to completed `Vercel Live Smoke Evidence` runs.
