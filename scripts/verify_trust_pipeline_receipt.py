@@ -96,14 +96,16 @@ def _load(path: Path) -> Any:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("authorization", type=Path)
-    parser.add_argument("receipt", type=Path)
+    parser.add_argument("authorization", nargs="?", type=Path)
+    parser.add_argument("receipt", nargs="?", type=Path)
     parser.add_argument("--provider-diagnosis", type=Path)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
         _self_test()
         return 0
+    if args.authorization is None or args.receipt is None:
+        parser.error("authorization and receipt are required")
     try:
         result = verify_receipt(
             _load(args.authorization), _load(args.receipt),
