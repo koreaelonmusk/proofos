@@ -111,6 +111,25 @@ The workflow always checks out the current trusted verifier implementation.
 the sealed evidence bundle; it is not used to roll the verifier code back to an
 older deployment revision.
 
+### Automatic authenticated-E2E promotion
+
+The workflow also subscribes to completed `Vercel Live Smoke Evidence` runs.
+Automatic promotion is accepted only when the source run completed successfully
+and its `head_branch` is exactly `main`. Pull-request previews therefore cannot
+open the OIDC-capable job, even if they can produce a syntactically valid evidence
+bundle.
+
+The credential-free `authorize` job resolves the source run ID and Git SHA from
+the immutable `workflow_run` event, re-checks the source workflow identity with
+the GitHub API, downloads the sealed bundle, and independently verifies the launch
+verdict. A `HOLD` verdict is a normal green authorization result with
+`authorized=false`; the `privileged-e2e` job is skipped and no GitHub OIDC token
+is minted. Only `READY_FOR_AUTHENTICATED_E2E` produces `authorized=true`.
+
+Manual dispatch remains available for controlled recovery and debugging, but the
+same source-run identity, main-branch, artifact, origin, SHA, and verdict checks
+apply before any privileged identity can be created.
+
 ## Explicit live model selection
 
 `PROOFOS_GEMINI_MODEL` selects the model used by all three live ADK roles.
