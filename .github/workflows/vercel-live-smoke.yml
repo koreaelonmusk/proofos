@@ -142,3 +142,87 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: 30
+
+  trusted-source:
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment.ref == 'main' &&
+      (
+        github.event.deployment.environment == 'Production' ||
+        github.event.deployment.environment == 'production'
+      ) &&
+      (
+        contains(github.event.deployment_status.environment_url, '.vercel.app') ||
+        contains(github.event.deployment_status.target_url, '.vercel.app')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Resolve trusted production origin
+        id: deployment
+        shell: bash
+        env:
+          ENVIRONMENT_URL: ${{ github.event.deployment_status.environment_url }}
+          TARGET_URL: ${{ github.event.deployment_status.target_url }}
+        run: |
+          set -euo pipefail
+          url="$ENVIRONMENT_URL"
+          if [[ "$url" != *".vercel.app"* ]]; then
+            url="$TARGET_URL"
+          fi
+          [[ "$url" == https://*.vercel.app || "$url" == https://*.vercel.app/ ]] || {
+            echo "trusted-source target is not an exact Vercel deployment origin"
+            exit 1
+          }
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Mint short-lived GitHub OIDC identity
+        id: oidc
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken();
+            core.setSecret(token);
+            core.setOutput('token', token);
+
+      - name: Validate trusted-source probe locally
+        run: |
+          python scripts/verify_vercel_trusted_source.py --self-test
+          python scripts/verify_vercel_trusted_source_artifact.py --self-test
+
+      - name: Observe Vercel Trusted Source boundary
+        env:
+          DEPLOYMENT_URL: ${{ steps.deployment.outputs.url }}
+          VERCEL_TRUSTED_OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        run: |
+          python scripts/verify_vercel_trusted_source.py \
+            --url "$DEPLOYMENT_URL" \
+            --output "artifacts/live-smoke/vercel-trusted-source-${{ github.run_id }}.json" \
+            --expected-git-sha "$GITHUB_SHA" \
+            --github-deployment-id "${{ github.event.deployment.id }}" \
+            --github-deployment-status-id "${{ github.event.deployment_status.id }}" \
+            --github-environment "${{ github.event.deployment.environment }}" \
+            --environment-url "$DEPLOYMENT_URL"
+
+      - name: Verify trusted-source evidence independently
+        run: |
+          python scripts/verify_vercel_trusted_source_artifact.py \
+            "artifacts/live-smoke/vercel-trusted-source-${{ github.run_id }}.json"
+
+      - name: Upload trusted-source evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: vercel-trusted-source-${{ github.run_id }}.json
+          path: artifacts/live-smoke/vercel-trusted-source-${{ github.run_id }}.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
