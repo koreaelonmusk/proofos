@@ -112,7 +112,7 @@ def validate() -> list[str]:
         issues.append("google_auth_action_must_appear_exactly_once")
     if text.count('workflows: ["Vercel Live Smoke Evidence"]') != 1:
         issues.append("live_smoke_workflow_trigger_must_appear_exactly_once")
-    if 'test "$(jq -r '.authorized' <<<"$result")" = "true"' in authorize:
+    if "test \"$(jq -r '.authorized' <<<\"$result\")\" = \"true\"" in authorize:
         issues.append("hold_must_not_fail_authorization_job")
 
     gate = authorize.find("- name: Authorize privileged authenticated E2E")
