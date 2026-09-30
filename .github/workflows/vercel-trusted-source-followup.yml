@@ -1,0 +1,181 @@
+name: Vercel Trusted Source Follow-up
+
+on:
+  workflow_run:
+    workflows: ["Vercel Live Smoke Evidence"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  authorize:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      source_run_id: ${{ steps.source.outputs.run_id }}
+      source_git_sha: ${{ steps.source.outputs.git_sha }}
+      target_origin: ${{ steps.bundle.outputs.target_origin }}
+      github_deployment_id: ${{ steps.bundle.outputs.github_deployment_id }}
+      github_deployment_status_id: ${{ steps.bundle.outputs.github_deployment_status_id }}
+      deployment_environment: ${{ steps.bundle.outputs.deployment_environment }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install minimal verifier runtime
+        run: |
+          python -m pip install uv
+          uv sync --locked
+
+      - name: Resolve successful live-evidence source run
+        id: source
+        shell: bash
+        env:
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_GIT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]] || {
+            echo "invalid source run id"
+            exit 1
+          }
+          [[ "$SOURCE_GIT_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo "invalid source git SHA"
+            exit 1
+          }
+          echo "run_id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "git_sha=${SOURCE_GIT_SHA,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify source live-evidence workflow identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          EXPECTED_GIT_SHA: ${{ steps.source.outputs.git_sha }}
+        run: |
+          set -euo pipefail
+          api="repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID"
+          test "$(gh api "$api" --jq '.name')" = "Vercel Live Smoke Evidence"
+          test "$(gh api "$api" --jq '.event')" = "deployment_status"
+          test "$(gh api "$api" --jq '.status')" = "completed"
+          test "$(gh api "$api" --jq '.conclusion')" = "success"
+          test "$(gh api "$api" --jq '.head_sha')" = "$EXPECTED_GIT_SHA"
+          test "$(gh api "$api" --jq '.head_branch')" = "main"
+          echo "source live-evidence workflow identity OK"
+
+      - name: Download and independently verify sealed public bundle
+        id: bundle
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          EXPECTED_GIT_SHA: ${{ steps.source.outputs.git_sha }}
+        run: |
+          set -euo pipefail
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-$SOURCE_RUN_ID.json" \
+            --output "artifacts/trusted-followup/health/vercel-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-trust-$SOURCE_RUN_ID.json" \
+            --output "artifacts/trusted-followup/trust/vercel-trust-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-manifest-$SOURCE_RUN_ID.json" \
+            --output "artifacts/trusted-followup/manifest/vercel-manifest-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-launch-verdict-$SOURCE_RUN_ID.json" \
+            --output "artifacts/trusted-followup/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/verify_live_launch_verdict.py \
+            "artifacts/trusted-followup/health/vercel-$SOURCE_RUN_ID.json" \
+            "artifacts/trusted-followup/trust/vercel-trust-$SOURCE_RUN_ID.json" \
+            "artifacts/trusted-followup/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
+            "artifacts/trusted-followup/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json" \
+            --expected-git-sha "$EXPECTED_GIT_SHA"
+
+          verdict="artifacts/trusted-followup/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"
+          test "$(jq -r '.deployment_environment' "$verdict")" = "production"
+
+          echo "target_origin=$(jq -r '.target_origin' "$verdict")" >> "$GITHUB_OUTPUT"
+          echo "github_deployment_id=$(jq -r '.github_deployment_id' "$verdict")" >> "$GITHUB_OUTPUT"
+          echo "github_deployment_status_id=$(jq -r '.github_deployment_status_id' "$verdict")" >> "$GITHUB_OUTPUT"
+          echo "deployment_environment=production" >> "$GITHUB_OUTPUT"
+
+  trusted-source:
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Mint short-lived GitHub OIDC identity from main follow-up
+        id: oidc
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken();
+            core.setSecret(token);
+            core.setOutput('token', token);
+
+      - name: Validate Trusted Source probe locally
+        run: |
+          python scripts/verify_vercel_trusted_source.py --self-test
+          python scripts/verify_vercel_trusted_source_artifact.py --self-test
+
+      - name: Observe protected production collector through Trusted Sources
+        env:
+          DEPLOYMENT_URL: ${{ needs.authorize.outputs.target_origin }}
+          SOURCE_GIT_SHA: ${{ needs.authorize.outputs.source_git_sha }}
+          SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
+          VERCEL_TRUSTED_OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        run: |
+          set -euo pipefail
+          python scripts/verify_vercel_trusted_source.py \
+            --url "$DEPLOYMENT_URL" \
+            --output "artifacts/trusted-followup/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            --expected-git-sha "$SOURCE_GIT_SHA" \
+            --github-deployment-id "${{ needs.authorize.outputs.github_deployment_id }}" \
+            --github-deployment-status-id "${{ needs.authorize.outputs.github_deployment_status_id }}" \
+            --github-environment "${{ needs.authorize.outputs.deployment_environment }}" \
+            --environment-url "$DEPLOYMENT_URL"
+
+      - name: Independently verify Trusted Source evidence
+        env:
+          SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
+        run: |
+          python scripts/verify_vercel_trusted_source_artifact.py \
+            "artifacts/trusted-followup/vercel-trusted-followup-$SOURCE_RUN_ID.json"
+
+      - name: Upload Trusted Source follow-up evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: vercel-trusted-followup-${{ needs.authorize.outputs.source_run_id }}.json
+          path: artifacts/trusted-followup/vercel-trusted-followup-${{ needs.authorize.outputs.source_run_id }}.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
