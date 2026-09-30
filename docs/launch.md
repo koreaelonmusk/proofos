@@ -111,6 +111,31 @@ The workflow always checks out the current trusted verifier implementation.
 the sealed evidence bundle; it is not used to roll the verifier code back to an
 older deployment revision.
 
+### Vercel Trusted Source diagnostic
+
+The regular live-smoke job remains credential-free and continues to record what an
+ordinary external observer can prove. A second `trusted-source` job exists only
+for successful **main / production** Vercel deployment events and has job-local
+`id-token: write`.
+
+That job follows Vercel's official Trusted Sources flow: GitHub Actions mints a
+short-lived OIDC token, masks it immediately, and the probe sends it only as
+`x-vercel-trusted-oidc-idp-token`. The token is never written to evidence,
+workflow artifacts, or logs.
+
+The diagnostic records one of:
+
+- `TRUSTED_SOURCE_REJECTED`: Vercel's edge still returned 401/403. This is a
+  configuration observation, not an application failure.
+- `TRUSTED_SOURCE_ACCEPTED_NOT_READY`: edge authentication succeeded and
+  application readiness was reached, but ProofOS intentionally remained not-ready.
+- `TRUSTED_SOURCE_ACCEPTED_READY`: edge authentication and application
+  readiness both succeeded. This still does not prove signed authenticated
+  collection; that remains the next independent E2E gate.
+
+The public smoke job has no `id-token: write`. The trusted OIDC authority is
+isolated to this diagnostic job and is not reused as Google Cloud identity.
+
 ### Automatic authenticated-E2E promotion
 
 The workflow also subscribes to completed `Vercel Live Smoke Evidence` runs.
