@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import sys
+import hashlib
 from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,6 +14,8 @@ sys.path.insert(0, str(SCRIPTS))
 
 from build_extropy_jev0_verification_receipt import (  # noqa: E402
     KIND,
+    VERIFIER_PATH,
+    ExtropyJev0ReceiptError,
     _fixture,
     build_receipt,
 )
@@ -23,23 +28,20 @@ from verify_extropy_jev0_verification_receipt import (  # noqa: E402
 class ExtropyJev0VerificationReceiptTests(unittest.TestCase):
     def setUp(self) -> None:
         self.report, self.executable, self.policy, self.capabilities = _fixture()
-        self.verifier = b"proofos-verifier-v1"
         self.receipt = build_receipt(
             self.report,
             executable_bytes=self.executable,
             policy_bytes=self.policy,
             capabilities=self.capabilities,
-            verifier_bytes=self.verifier,
         )
 
-    def verify(self, receipt=None, report=None, verifier=None):
+    def verify(self, receipt=None, report=None):
         return verify_receipt(
             self.receipt if receipt is None else receipt,
             self.report if report is None else report,
             executable_bytes=self.executable,
             policy_bytes=self.policy,
             capabilities=self.capabilities,
-            verifier_bytes=self.verifier if verifier is None else verifier,
         )
 
     def test_receipt_is_deterministic_and_content_addressed(self):
@@ -48,7 +50,6 @@ class ExtropyJev0VerificationReceiptTests(unittest.TestCase):
             executable_bytes=self.executable,
             policy_bytes=self.policy,
             capabilities=self.capabilities,
-            verifier_bytes=self.verifier,
         )
         self.assertEqual(self.receipt, second)
         self.assertEqual(self.receipt["kind"], KIND)
@@ -62,12 +63,28 @@ class ExtropyJev0VerificationReceiptTests(unittest.TestCase):
             self.receipt["receipt_sha256"],
         )
 
-    def test_receipt_binds_verifier_implementation_bytes(self):
-        with self.assertRaisesRegex(
-            ExtropyJev0ReceiptVerificationError,
-            "differs from re-derivation",
-        ):
-            self.verify(verifier=b"different-proofos-verifier")
+    def test_receipt_binds_loaded_verifier_implementation_bytes(self):
+        expected = hashlib.sha256(VERIFIER_PATH.read_bytes()).hexdigest()
+        self.assertEqual(self.receipt["verifier_sha256"], expected)
+
+    def test_builder_rejects_canonical_path_that_is_not_loaded_verifier(self):
+        with tempfile.TemporaryDirectory() as directory:
+            unrelated = Path(directory) / "other-verifier.py"
+            unrelated.write_text("def verify_execution_report(): pass\n", encoding="utf-8")
+            with patch(
+                "build_extropy_jev0_verification_receipt.VERIFIER_PATH",
+                unrelated,
+            ):
+                with self.assertRaisesRegex(
+                    ExtropyJev0ReceiptError,
+                    "loaded provenance verifier does not match canonical verifier path",
+                ):
+                    build_receipt(
+                        self.report,
+                        executable_bytes=self.executable,
+                        policy_bytes=self.policy,
+                        capabilities=self.capabilities,
+                    )
 
     def test_rejects_tampered_receipt_digest(self):
         tampered = dict(self.receipt)
