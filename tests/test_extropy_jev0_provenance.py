@@ -50,7 +50,10 @@ class ExtropyJev0ProvenanceVerifierTests(unittest.TestCase):
             "records": [
                 {
                     "capabilityId": "tool/mcp/extropy-local/run_npm_script",
+                    "executor": "tool-broker",
+                    "workCapabilities": ["EXECUTE"],
                     "status": "EXECUTED",
+                    "reason": "executed",
                     "executed": True,
                     "verified": False,
                     "jev0Execution": dict(self.provenance),
