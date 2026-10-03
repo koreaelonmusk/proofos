@@ -114,6 +114,10 @@ jobs:
         run: python scripts/build_continuity_proof.py
       - name: Validate Extropy jev0 execution provenance verifier
         run: python scripts/verify_extropy_jev0_provenance.py --self-test
+      - name: Validate Extropy jev0 verification receipt
+        run: |
+          python scripts/build_extropy_jev0_verification_receipt.py --self-test
+          python scripts/verify_extropy_jev0_verification_receipt.py --self-test
       - name: Run verification contract tests
         run: python -m unittest discover -s tests -t . -v
       - name: Build both deployable images
