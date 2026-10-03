@@ -150,6 +150,10 @@ def _records(payload: Any) -> list[dict[str, Any]]:
             executed_count += 1
 
         if "jev0Execution" in record:
+            if record["executed"] is not True:
+                raise ExtropyJev0ProvenanceError(
+                    "jev0 provenance is attached to a non-executed capability"
+                )
             if capability_id is None or "EXECUTE" not in capabilities:
                 raise ExtropyJev0ProvenanceError(
                     "jev0 provenance requires an identified EXECUTE capability"
