@@ -362,3 +362,41 @@ Temporary Gemini server failures (HTTP 500, 502, 503, or 504) are retried twice
 with bounded 5 and 10 second delays. Other client and authentication failures
 are not retried. Exhaustion still ends in ABSTAIN; it never changes the verdict
 or switches to an unconfigured model.
+
+
+### Extropy jev0 execution provenance
+
+ProofOS can independently verify an Extropy `capability.execution.report` that
+contains `extropy-jev0-execution-provenance/v1`.
+
+The verifier does not trust the executor's recorded digests by themselves.
+It requires separate constituent inputs:
+
+- the exact jev0 executable bytes,
+- the exact jev0 policy bytes,
+- the exact `jev0 capabilities --json` document used for negotiation.
+
+It re-computes:
+
+```text
+SHA256(jev0 executable)
+SHA256(policy)
+SHA256(canonical capabilities JSON)
+```
+
+and requires all three values to match the durable Extropy execution report.
+
+A valid result proves only that the supplied constituents match the recorded
+execution provenance. It does **not** prove Extropy had authority to execute, and
+it does **not** prove that the supervised command achieved its requested
+postcondition. Those remain separate authority and verification questions.
+
+Use:
+
+```sh
+python scripts/verify_extropy_jev0_provenance.py \
+  execution-report.json \
+  --jev0-executable /path/to/jev0 \
+  --policy /path/to/policy.json \
+  --capabilities capabilities.json
+```
