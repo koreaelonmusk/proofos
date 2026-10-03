@@ -105,6 +105,7 @@ class ExtropyJev0ProvenanceVerifierTests(unittest.TestCase):
     def test_rejects_inconsistent_counts(self):
         payload = self.payload()
         payload["executedCount"] = 0
+        payload["blockedCount"] = 1
         with self.assertRaisesRegex(
             module.ExtropyJev0ProvenanceError,
             "executedCount does not match executed records",
