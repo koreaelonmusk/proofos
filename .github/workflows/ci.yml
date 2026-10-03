@@ -112,6 +112,8 @@ jobs:
       # when regenerated, not that two runs produce identical bytes.
       - name: Regenerate the deterministic restart proof
         run: python scripts/build_continuity_proof.py
+      - name: Validate Extropy jev0 execution provenance verifier
+        run: python scripts/verify_extropy_jev0_provenance.py --self-test
       - name: Run verification contract tests
         run: python -m unittest discover -s tests -t . -v
       - name: Build both deployable images
