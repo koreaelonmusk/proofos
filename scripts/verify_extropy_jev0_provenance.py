@@ -16,6 +16,39 @@ EXPECTED_PROVENANCE_KEYS = {
     "policySha256",
     "capabilitiesSha256",
 }
+REPORT_SCHEMA = "extropy-capability-execution-report/v1"
+REPORT_KIND = "capability.execution.report"
+EXPECTED_REPORT_KEYS = {
+    "schema",
+    "kind",
+    "workId",
+    "runId",
+    "mode",
+    "executedCount",
+    "blockedCount",
+    "records",
+}
+EXPECTED_RECORD_KEYS = {
+    "capabilityId",
+    "executor",
+    "workCapabilities",
+    "status",
+    "reason",
+    "executed",
+    "verified",
+}
+ALLOWED_MODES = {"shadow", "readonly-canary", "armed"}
+ALLOWED_STATUSES = {
+    "SHADOWED",
+    "EXECUTED",
+    "INPUT_REQUIRED",
+    "APPROVAL_REQUIRED",
+    "NOT_BOUND",
+    "DENIED",
+    "FAILED",
+    "UNRESOLVED",
+    "SKIPPED_MODE",
+}
 
 
 class ExtropyJev0ProvenanceError(RuntimeError):
@@ -57,18 +90,76 @@ def _validate_provenance(value: Any) -> dict[str, str]:
     return value
 
 
+def _nonnegative_int(value: Any) -> bool:
+    return type(value) is int and value >= 0
+
+
 def _records(payload: Any) -> list[dict[str, Any]]:
-    if not isinstance(payload, dict):
-        raise ExtropyJev0ProvenanceError("execution report payload must be an object")
+    if not isinstance(payload, dict) or set(payload) != EXPECTED_REPORT_KEYS:
+        raise ExtropyJev0ProvenanceError("execution report envelope schema drifted")
+    if payload.get("schema") != REPORT_SCHEMA or payload.get("kind") != REPORT_KIND:
+        raise ExtropyJev0ProvenanceError("execution report identity is invalid")
+    if not isinstance(payload.get("workId"), str) or not payload["workId"]:
+        raise ExtropyJev0ProvenanceError("execution report workId is invalid")
+    if not isinstance(payload.get("runId"), str) or not payload["runId"]:
+        raise ExtropyJev0ProvenanceError("execution report runId is invalid")
+    if payload.get("mode") not in ALLOWED_MODES:
+        raise ExtropyJev0ProvenanceError("execution report mode is invalid")
+    if not _nonnegative_int(payload.get("executedCount")):
+        raise ExtropyJev0ProvenanceError("execution report executedCount is invalid")
+    if not _nonnegative_int(payload.get("blockedCount")):
+        raise ExtropyJev0ProvenanceError("execution report blockedCount is invalid")
+
     records = payload.get("records")
     if not isinstance(records, list):
         raise ExtropyJev0ProvenanceError("execution report records must be an array")
+    if payload["executedCount"] + payload["blockedCount"] != len(records):
+        raise ExtropyJev0ProvenanceError("execution report counts do not match records")
+
+    executed_count = 0
     result: list[dict[str, Any]] = []
     for record in records:
         if not isinstance(record, dict):
             raise ExtropyJev0ProvenanceError("execution report record must be an object")
+        keys = set(record)
+        if keys not in (EXPECTED_RECORD_KEYS, EXPECTED_RECORD_KEYS | {"jev0Execution"}):
+            raise ExtropyJev0ProvenanceError("execution report record schema drifted")
+        capability_id = record.get("capabilityId")
+        if capability_id is not None and (
+            not isinstance(capability_id, str) or not capability_id
+        ):
+            raise ExtropyJev0ProvenanceError("execution report capabilityId is invalid")
+        executor = record.get("executor")
+        if executor is not None and (not isinstance(executor, str) or not executor):
+            raise ExtropyJev0ProvenanceError("execution report executor is invalid")
+        capabilities = record.get("workCapabilities")
+        if (
+            not isinstance(capabilities, list)
+            or any(not isinstance(item, str) or not item for item in capabilities)
+        ):
+            raise ExtropyJev0ProvenanceError("execution report workCapabilities are invalid")
+        if record.get("status") not in ALLOWED_STATUSES:
+            raise ExtropyJev0ProvenanceError("execution report status is invalid")
+        if not isinstance(record.get("reason"), str):
+            raise ExtropyJev0ProvenanceError("execution report reason is invalid")
+        if type(record.get("executed")) is not bool:
+            raise ExtropyJev0ProvenanceError("execution report executed flag is invalid")
+        if record.get("verified") is not False:
+            raise ExtropyJev0ProvenanceError("execution report verified flag must be false")
+        if record["executed"]:
+            executed_count += 1
+
         if "jev0Execution" in record:
+            if capability_id is None or "EXECUTE" not in capabilities:
+                raise ExtropyJev0ProvenanceError(
+                    "jev0 provenance requires an identified EXECUTE capability"
+                )
             result.append(record)
+
+    if executed_count != payload["executedCount"]:
+        raise ExtropyJev0ProvenanceError(
+            "execution report executedCount does not match executed records"
+        )
     if not result:
         raise ExtropyJev0ProvenanceError("execution report contains no jev0 provenance")
     return result
@@ -83,7 +174,8 @@ def verify_execution_report(
 ) -> dict[str, Any]:
     if not isinstance(capabilities, dict):
         raise ExtropyJev0ProvenanceError("capabilities constituent must be a JSON object")
-    if capabilities.get("schema_version") != 1:
+    schema_version = capabilities.get("schema_version")
+    if type(schema_version) is not int or schema_version != 1:
         raise ExtropyJev0ProvenanceError("unsupported jev0 capabilities schema")
 
     expected_executable = _sha256_bytes(executable_bytes)
@@ -161,7 +253,13 @@ def _self_test() -> None:
         "capabilitiesSha256": _canonical_json_sha256(capabilities),
     }
     payload = {
+        "schema": REPORT_SCHEMA,
+        "kind": REPORT_KIND,
+        "workId": "work-1",
         "runId": "run-1",
+        "mode": "armed",
+        "executedCount": 1,
+        "blockedCount": 0,
         "records": [
             {
                 "capabilityId": "tool/mcp/extropy-local/run_npm_script",
