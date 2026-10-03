@@ -38,13 +38,27 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _loaded_verifier_bytes() -> bytes:
+    loaded_path = Path(verify_execution_report.__code__.co_filename).resolve()
+    expected_path = VERIFIER_PATH.resolve()
+    if loaded_path != expected_path:
+        raise ExtropyJev0ReceiptError(
+            "loaded provenance verifier does not match canonical verifier path"
+        )
+    try:
+        return expected_path.read_bytes()
+    except OSError as exc:
+        raise ExtropyJev0ReceiptError(
+            f"could not read loaded provenance verifier: {type(exc).__name__}"
+        ) from exc
+
+
 def build_receipt(
     execution_report: Any,
     *,
     executable_bytes: bytes,
     policy_bytes: bytes,
     capabilities: Any,
-    verifier_bytes: bytes,
 ) -> dict[str, Any]:
     try:
         verification = verify_execution_report(
@@ -58,6 +72,7 @@ def build_receipt(
             f"execution provenance is not independently verified: {exc}"
         ) from exc
 
+    verifier_bytes = _loaded_verifier_bytes()
     records = verification["verified_records"]
     capability_ids = [record["capabilityId"] for record in records]
     executable_sha256 = _sha256_bytes(executable_bytes)
@@ -143,20 +158,17 @@ def _fixture() -> tuple[dict[str, Any], bytes, bytes, dict[str, Any]]:
 
 def _self_test() -> None:
     report, executable, policy, capabilities = _fixture()
-    verifier = b"proofos-verifier-v1"
     first = build_receipt(
         report,
         executable_bytes=executable,
         policy_bytes=policy,
         capabilities=capabilities,
-        verifier_bytes=verifier,
     )
     second = build_receipt(
         report,
         executable_bytes=executable,
         policy_bytes=policy,
         capabilities=capabilities,
-        verifier_bytes=verifier,
     )
     assert first == second
     assert first["verified_record_count"] == 1
@@ -196,7 +208,6 @@ def main() -> int:
             executable_bytes=_read_bytes(args.jev0_executable),
             policy_bytes=_read_bytes(args.policy),
             capabilities=_load_json(args.capabilities),
-            verifier_bytes=_read_bytes(VERIFIER_PATH),
         )
     except ExtropyJev0ReceiptError as exc:
         print(f"Extropy jev0 verification receipt FAILED: {exc}", file=sys.stderr)
