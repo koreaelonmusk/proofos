@@ -400,3 +400,47 @@ python scripts/verify_extropy_jev0_provenance.py \
   --policy /path/to/policy.json \
   --capabilities capabilities.json
 ```
+
+
+### Extropy jev0 verification receipt
+
+After independently re-verifying an Extropy capability execution report against
+the exact jev0 executable, policy, and capabilities constituents, ProofOS can
+persist a deterministic receipt:
+
+```text
+proofos-extropy-jev0-verification-receipt
+```
+
+The receipt binds:
+
+- canonical SHA-256 of the versioned Extropy execution report,
+- SHA-256 of the exact ProofOS provenance verifier implementation,
+- SHA-256 of the independent verification result,
+- exact jev0 executable SHA-256,
+- exact policy SHA-256,
+- canonical capabilities SHA-256,
+- verified record count and capability identities.
+
+The receipt itself is content-addressed with `receipt_sha256`. A separate
+receipt verifier first validates that digest, then rebuilds the receipt from the
+original execution report and constituents and requires exact equality.
+
+This creates a deterministic chain:
+
+```text
+Extropy durable execution report
+        |
+        v
+ProofOS independent constituent re-hash
+        |
+        v
+ProofOS verification result
+        |
+        v
+content-addressed verification receipt
+```
+
+The receipt is evidence, not authority. It does not prove that Extropy was
+authorized to execute and does not prove that the supervised command achieved
+its requested business postcondition.
