@@ -40,7 +40,13 @@ class ExtropyJev0ProvenanceVerifierTests(unittest.TestCase):
 
     def payload(self):
         return {
+            "schema": module.REPORT_SCHEMA,
+            "kind": module.REPORT_KIND,
+            "workId": "work-1",
             "runId": "run-1",
+            "mode": "armed",
+            "executedCount": 1,
+            "blockedCount": 0,
             "records": [
                 {
                     "capabilityId": "tool/mcp/extropy-local/run_npm_script",
@@ -68,6 +74,54 @@ class ExtropyJev0ProvenanceVerifierTests(unittest.TestCase):
             result["verified_records"][0]["executableSha256"],
             self.provenance["executableSha256"],
         )
+
+    def test_rejects_truncated_execution_report_envelope(self):
+        payload = {
+            "records": [
+                {
+                    "executed": True,
+                    "jev0Execution": dict(self.provenance),
+                }
+            ],
+        }
+        with self.assertRaisesRegex(
+            module.ExtropyJev0ProvenanceError,
+            "envelope schema drifted",
+        ):
+            self.verify(payload)
+
+    def test_rejects_report_identity_mismatch(self):
+        payload = self.payload()
+        payload["kind"] = "synthetic.report"
+        with self.assertRaisesRegex(
+            module.ExtropyJev0ProvenanceError,
+            "identity is invalid",
+        ):
+            self.verify(payload)
+
+    def test_rejects_inconsistent_counts(self):
+        payload = self.payload()
+        payload["executedCount"] = 0
+        with self.assertRaisesRegex(
+            module.ExtropyJev0ProvenanceError,
+            "executedCount does not match executed records",
+        ):
+            self.verify(payload)
+
+    def test_rejects_boolean_capabilities_schema_version(self):
+        payload = self.payload()
+        capabilities = dict(self.capabilities)
+        capabilities["schema_version"] = True
+        with self.assertRaisesRegex(
+            module.ExtropyJev0ProvenanceError,
+            "unsupported jev0 capabilities schema",
+        ):
+            module.verify_execution_report(
+                payload,
+                executable_bytes=self.executable,
+                policy_bytes=self.policy,
+                capabilities=capabilities,
+            )
 
     def test_rejects_schema_drift(self):
         payload = self.payload()
