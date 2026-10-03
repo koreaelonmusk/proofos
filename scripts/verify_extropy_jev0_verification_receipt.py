@@ -12,7 +12,6 @@ from typing import Any
 from build_extropy_jev0_verification_receipt import (
     KIND,
     SCHEMA_VERSION,
-    VERIFIER_PATH,
     ExtropyJev0ReceiptError,
     build_receipt,
 )
@@ -109,15 +108,6 @@ def _load_json(path: Path) -> Any:
     except (OSError, json.JSONDecodeError) as exc:
         raise ExtropyJev0ReceiptVerificationError(
             f"could not read JSON input: {type(exc).__name__}"
-        ) from exc
-
-
-def _read_bytes(path: Path) -> bytes:
-    try:
-        return path.read_bytes()
-    except OSError as exc:
-        raise ExtropyJev0ReceiptVerificationError(
-            f"could not read binary input: {type(exc).__name__}"
         ) from exc
 
 
