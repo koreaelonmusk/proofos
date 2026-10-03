@@ -64,7 +64,6 @@ def verify_receipt(
     executable_bytes: bytes,
     policy_bytes: bytes,
     capabilities: Any,
-    verifier_bytes: bytes,
 ) -> dict[str, Any]:
     if not isinstance(receipt, dict) or set(receipt) != EXPECTED_KEYS:
         raise ExtropyJev0ReceiptVerificationError("verification receipt schema drifted")
@@ -83,7 +82,6 @@ def verify_receipt(
             executable_bytes=executable_bytes,
             policy_bytes=policy_bytes,
             capabilities=capabilities,
-            verifier_bytes=verifier_bytes,
         )
     except ExtropyJev0ReceiptError as exc:
         raise ExtropyJev0ReceiptVerificationError(
@@ -127,13 +125,11 @@ def _self_test() -> None:
     from build_extropy_jev0_verification_receipt import _fixture
 
     report, executable, policy, capabilities = _fixture()
-    verifier = b"proofos-verifier-v1"
     receipt = build_receipt(
         report,
         executable_bytes=executable,
         policy_bytes=policy,
         capabilities=capabilities,
-        verifier_bytes=verifier,
     )
     result = verify_receipt(
         receipt,
@@ -141,7 +137,6 @@ def _self_test() -> None:
         executable_bytes=executable,
         policy_bytes=policy,
         capabilities=capabilities,
-        verifier_bytes=verifier,
     )
     assert result["valid"] is True
 
@@ -154,7 +149,6 @@ def _self_test() -> None:
             executable_bytes=executable,
             policy_bytes=policy,
             capabilities=capabilities,
-            verifier_bytes=verifier,
         )
     except ExtropyJev0ReceiptVerificationError:
         pass
@@ -197,7 +191,6 @@ def main() -> int:
             executable_bytes=_read_bytes(args.jev0_executable),
             policy_bytes=_read_bytes(args.policy),
             capabilities=_load_json(args.capabilities),
-            verifier_bytes=_read_bytes(VERIFIER_PATH),
         )
     except ExtropyJev0ReceiptVerificationError as exc:
         print(f"Extropy jev0 verification receipt INVALID: {exc}", file=sys.stderr)
