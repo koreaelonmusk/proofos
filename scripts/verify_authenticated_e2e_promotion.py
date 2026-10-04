@@ -37,7 +37,7 @@ from verify_followup_trusted_promotion import (
     verify_followup_promotion,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 KIND = "proofos-authenticated-e2e-promotion"
 PROMOTED = "AUTHENTICATED_E2E_VERIFIED"
 HOLD = "HOLD"
