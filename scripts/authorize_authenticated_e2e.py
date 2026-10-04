@@ -96,10 +96,29 @@ def authorize(
     authorization_basis = "public_launch_verdict" if authorized else "none"
     promotion_sha256 = None
 
-    if not authorized and (trusted_source is not None or trusted_promotion is not None):
-        if trusted_source is None or trusted_promotion is None:
+    legacy_requested = trusted_promotion is not None
+    followup_requested = any(
+        item is not None
+        for item in (
+            followup_trusted_source,
+            provider_diagnosis,
+            provider_admission,
+            followup_promotion,
+        )
+    )
+    if (
+        trusted_source is not None
+        and not legacy_requested
+        and not followup_requested
+    ):
+        raise E2EAuthorizationError(
+            "trusted source cannot be supplied without a promotion proof path"
+        )
+
+    if not authorized and legacy_requested:
+        if trusted_source is None:
             raise E2EAuthorizationError(
-                "trusted source and trusted promotion proof must be supplied together"
+                "legacy trusted promotion requires the trusted source constituent"
             )
         try:
             promoted = verify_trusted_promotion(
@@ -135,11 +154,11 @@ def authorize(
         provider_admission,
         followup_promotion,
     )
-    if not authorized and any(item is not None for item in followup_inputs):
-        if any(item is None for item in followup_inputs):
+    if not authorized and followup_requested:
+        if trusted_source is None or any(item is None for item in followup_inputs):
             raise E2EAuthorizationError(
-                "follow-up Trusted Source, provider diagnosis, provider admission, "
-                "and follow-up promotion must be supplied together"
+                "original Trusted Source, follow-up Trusted Source, provider diagnosis, "
+                "provider admission, and follow-up promotion must be supplied together"
             )
         if (
             not isinstance(followup_run_id, int)
