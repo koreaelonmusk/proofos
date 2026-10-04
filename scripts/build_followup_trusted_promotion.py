@@ -154,21 +154,22 @@ def derive_followup_promotion(
     return {**unsigned, "promotion_sha256": _digest(unsigned)}
 
 
-def _self_test() -> None:
+def _fixture() -> tuple[Any, ...]:
     from build_live_launch_verdict import (
         _blocked_health,
         _blocked_trust,
         _manifest,
         derive_verdict,
     )
-    from build_vercel_provider_admission import _self_test as admission_self_test
+    from build_vercel_trusted_source_diagnosis import derive_diagnosis
+    from build_vercel_provider_admission import derive_admission, READY, REJECTED
+    from verify_vercel_trusted_source_artifact import _base, _signed
 
-    admission_self_test()
-
-    # Full positive fixture is exercised by the provider-admission self-test and
-    # workflow integration; keep this self-test focused on public-HOLD semantics.
     origin = "https://proofos-production.vercel.app"
     sha = "0123456789abcdef0123456789abcdef01234567"
+    source_run_id = 10
+    followup_run_id = 20
+
     health = _blocked_health(origin, sha)
     trust = _blocked_trust(origin, sha, bypass_attempted=False)
     for evidence in (health, trust):
@@ -176,14 +177,148 @@ def _self_test() -> None:
         evidence["evidence_sha256"] = _digest(
             {k: v for k, v in evidence.items() if k != "evidence_sha256"}
         )
+    manifest = _manifest(health, trust, sha)
     verdict = derive_verdict(
         health,
         trust,
-        _manifest(health, trust, sha),
+        manifest,
         expected_git_sha=sha,
     )
-    assert verdict["status"] == "HOLD"
-    print("follow-up trusted promotion public-HOLD self-test OK")
+
+    original = _base(REJECTED)
+    original["workflow_source_git_sha"] = sha
+    original["target_origin"] = origin
+    original["deployment_event"] = {
+        "github_deployment_id": verdict["github_deployment_id"],
+        "github_deployment_status_id": verdict["github_deployment_status_id"],
+        "environment": "production",
+        "environment_url": origin,
+        "source_git_sha": sha,
+    }
+    original["oidc_claims"]["event_name"] = "deployment_status"
+    original["oidc_claims"]["workflow_sha"] = sha
+    original["oidc_claims"].pop("ref", None)
+    original.update(
+        {
+            "http_status": 401,
+            "claim_boundary": [
+                "proves the Vercel edge did not accept this GitHub Actions OIDC request",
+                "does not reveal or persist the OIDC token",
+                "does not prove application health or readiness",
+            ],
+        }
+    )
+    original = _signed(original)
+
+    followup = _base(READY)
+    followup["workflow_source_git_sha"] = sha
+    followup["target_origin"] = origin
+    followup["deployment_event"] = json.loads(json.dumps(original["deployment_event"]))
+    followup["oidc_claims"]["event_name"] = "workflow_run"
+    followup["oidc_claims"]["ref"] = "refs/heads/main"
+    followup["oidc_claims"]["workflow_ref"] = (
+        "koreaelonmusk/proofos/.github/workflows/"
+        "vercel-trusted-source-followup.yml@refs/heads/main"
+    )
+    followup["oidc_claims"]["workflow_sha"] = sha
+    followup["oidc_claims"]["sub"] = (
+        "repo:koreaelonmusk@44775845/proofos@1341515802:ref:refs/heads/main"
+    )
+    followup.update(
+        {
+            "health": {
+                "status": "ok",
+                "service": "proofos-collector",
+                "runtime": {
+                    "platform": "vercel",
+                    "environment": "production",
+                    "deployment_id": "dpl_test",
+                    "git_sha": sha,
+                    "url": origin,
+                },
+            },
+            "readiness": {
+                "status": "ready",
+                "service": "proofos-collector",
+                "issues": [],
+            },
+            "anonymous_collect": {
+                "outcome": "ANONYMOUS_COLLECTION_DENIED",
+                "http_status": 401,
+            },
+            "claim_boundary": [
+                "proves Vercel Trusted Sources accepted the GitHub Actions OIDC request",
+                "records only the public health/readiness contract after edge authentication",
+                "proves the reached application denied anonymous collection before probe or signing authority",
+                "does not prove authenticated collector invocation or signed evidence collection",
+                "does not reveal or persist the OIDC token",
+            ],
+        }
+    )
+    followup = _signed(followup)
+
+    diagnosis = derive_diagnosis(
+        original,
+        followup,
+        source_run_id=source_run_id,
+        followup_run_id=followup_run_id,
+    )
+    admission = derive_admission(
+        original,
+        followup,
+        diagnosis,
+        source_run_id=source_run_id,
+        followup_run_id=followup_run_id,
+    )
+    return (
+        health,
+        trust,
+        manifest,
+        verdict,
+        original,
+        followup,
+        diagnosis,
+        admission,
+        sha,
+        source_run_id,
+        followup_run_id,
+    )
+
+
+def _self_test() -> None:
+    (
+        health,
+        trust,
+        manifest,
+        verdict,
+        original,
+        followup,
+        diagnosis,
+        admission,
+        sha,
+        source_run_id,
+        followup_run_id,
+    ) = _fixture()
+
+    proof = derive_followup_promotion(
+        health,
+        trust,
+        manifest,
+        verdict,
+        original,
+        followup,
+        diagnosis,
+        admission,
+        expected_git_sha=sha,
+        source_run_id=source_run_id,
+        followup_run_id=followup_run_id,
+    )
+    assert proof["status"] == STATUS
+    assert proof["source_run_id"] == source_run_id
+    assert proof["followup_run_id"] == followup_run_id
+    assert proof["provider_admission_sha256"] == admission["admission_sha256"]
+    assert len(proof["promotion_sha256"]) == 64
+    print("follow-up trusted promotion self-test OK")
 
 
 def _load(path: Path) -> Any:
