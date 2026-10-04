@@ -243,6 +243,36 @@ and exits green with `authorized=false` instead of treating provider rejection
 as a code failure. Tampered, mismatched, or unverifiable artifacts remain hard
 failures.
 
+### Provider Admission Contract
+
+The Provider Admission Contract is a non-authorizing evidence object that decides
+whether the run-bound `workflow_run` Trusted Source observation is eligible to
+become an input to Trusted Promotion.
+
+It consumes four independently verifiable artifacts for one deployment:
+
+- the original `deployment_status` Trusted Source observation;
+- the main-ref `workflow_run` follow-up observation;
+- the run-bound provider capability diagnosis;
+- the exact source and follow-up workflow run IDs.
+
+The contract emits one of three bounded states:
+
+- `ADMITTED_FOR_TRUSTED_PROMOTION` only when the follow-up observation is
+  `TRUSTED_SOURCE_ACCEPTED_READY_AND_ANONYMOUS_DENIED`, its OIDC identity is
+  bound to the main follow-up workflow, and the diagnosis independently records
+  `FOLLOWUP_TRUST_PATH_ACCEPTED`;
+- `HOLD_TRUSTED_SOURCE_NOT_READY` when edge identity is accepted but the
+  application is not ready;
+- `HOLD_PROVIDER_CONFIGURATION_REQUIRED` while Vercel still rejects the
+  follow-up identity.
+
+This contract does not authorize privileged E2E, mint credentials, or rewrite
+the public launch verdict. It only establishes whether follow-up evidence may be
+used by a future Trusted Promotion bridge. The contract is independently
+re-derived before persistence and contains no raw token or provider response
+body.
+
 ### Trusted Promotion Proof
 
 `build_trusted_promotion_proof.py` is a narrow authority bridge, not a second
