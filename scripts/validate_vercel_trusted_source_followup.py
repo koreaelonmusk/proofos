@@ -86,7 +86,11 @@ def validate() -> list[str]:
         '--source-run-id "$SOURCE_RUN_ID"',
         '--followup-run-id "$GITHUB_RUN_ID"',
         "verify_vercel_trusted_source_diagnosis.py",
+        "Build and independently verify Provider Admission Contract",
+        "build_vercel_provider_admission.py",
+        "verify_vercel_provider_admission.py",
         "vercel-trusted-diagnosis-",
+        "vercel-provider-admission-",
         "archive: false",
     )
     for snippet in required_trusted:
