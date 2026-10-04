@@ -39,6 +39,7 @@ jobs:
       target_origin: ${{ steps.authorize.outputs.target_origin }}
       source_git_sha: ${{ steps.authorize.outputs.source_git_sha }}
       source_run_id: ${{ steps.authorize.outputs.source_run_id }}
+      followup_run_id: ${{ steps.authorize.outputs.followup_run_id }}
       manifest_sha256: ${{ steps.authorize.outputs.manifest_sha256 }}
       verdict_sha256: ${{ steps.authorize.outputs.verdict_sha256 }}
       authorization_basis: ${{ steps.authorize.outputs.authorization_basis }}
@@ -84,20 +85,32 @@ jobs:
             test "$(gh api "$api" --jq '.head_sha')" = "$AUTO_GIT_SHA"
             test "$(gh api "$api" --jq '.head_branch')" = "main"
 
-            artifact_name="$(gh api "$api/artifacts" --jq '
+            diagnosis_artifact="$(gh api "$api/artifacts" --jq '
               [.artifacts[].name
                | select(test("^vercel-trusted-diagnosis-[0-9]+\\.json$"))]
               | if length == 1 then .[0] else empty end
             ')"
-            [[ "$artifact_name" =~ ^vercel-trusted-diagnosis-([0-9]+)\.json$ ]] || {
+            [[ "$diagnosis_artifact" =~ ^vercel-trusted-diagnosis-([0-9]+)\.json$ ]] || {
               echo "exactly one run-bound provider diagnosis artifact is required"
               exit 1
             }
             run_id="${BASH_REMATCH[1]}"
+
+            admission_artifact="$(gh api "$api/artifacts" --jq --arg source "$run_id" '
+              [.artifacts[].name
+               | select(. == ("vercel-provider-admission-" + $source + ".json"))]
+              | if length == 1 then .[0] else empty end
+            ')"
+            test "$admission_artifact" = "vercel-provider-admission-$run_id.json" || {
+              echo "exactly one matching Provider Admission Contract is required"
+              exit 1
+            }
+
             git_sha="$AUTO_GIT_SHA"
             deployment_url=""
             echo "followup_run_id=$followup_run_id" >> "$GITHUB_OUTPUT"
-            echo "diagnosis_artifact=$artifact_name" >> "$GITHUB_OUTPUT"
+            echo "diagnosis_artifact=$diagnosis_artifact" >> "$GITHUB_OUTPUT"
+            echo "admission_artifact=$admission_artifact" >> "$GITHUB_OUTPUT"
           else
             run_id="$MANUAL_RUN_ID"
             git_sha="$MANUAL_GIT_SHA"
@@ -111,6 +124,7 @@ jobs:
           if [[ "$EVENT_NAME" != "workflow_run" ]]; then
             echo "followup_run_id=" >> "$GITHUB_OUTPUT"
             echo "diagnosis_artifact=" >> "$GITHUB_OUTPUT"
+            echo "admission_artifact=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Verify automatic provider diagnosis provenance
@@ -121,6 +135,7 @@ jobs:
           FOLLOWUP_RUN_ID: ${{ steps.source.outputs.followup_run_id }}
           SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
           DIAGNOSIS_ARTIFACT: ${{ steps.source.outputs.diagnosis_artifact }}
+          ADMISSION_ARTIFACT: ${{ steps.source.outputs.admission_artifact }}
         run: |
           set -euo pipefail
 
@@ -149,7 +164,21 @@ jobs:
             --source-run-id "$SOURCE_RUN_ID" \
             --followup-run-id "$FOLLOWUP_RUN_ID"
 
-          echo "automatic provider diagnosis provenance OK"
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$FOLLOWUP_RUN_ID" \
+            --artifact "$ADMISSION_ARTIFACT" \
+            --output "artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/verify_vercel_provider_admission.py \
+            "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --followup-run-id "$FOLLOWUP_RUN_ID"
+
+          echo "automatic provider diagnosis and admission provenance OK"
 
       - name: Verify source evidence workflow identity
         shell: bash
