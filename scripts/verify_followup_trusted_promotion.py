@@ -129,9 +129,51 @@ def verify_followup_promotion(
 
 
 def _self_test() -> None:
-    from build_followup_trusted_promotion import _self_test as builder_self_test
+    from build_followup_trusted_promotion import _fixture
 
-    builder_self_test()
+    (
+        health,
+        trust,
+        manifest,
+        verdict,
+        original,
+        followup,
+        diagnosis,
+        admission,
+        sha,
+        source_run_id,
+        followup_run_id,
+    ) = _fixture()
+    promotion = derive_followup_promotion(
+        health,
+        trust,
+        manifest,
+        verdict,
+        original,
+        followup,
+        diagnosis,
+        admission,
+        expected_git_sha=sha,
+        source_run_id=source_run_id,
+        followup_run_id=followup_run_id,
+    )
+    result = verify_followup_promotion(
+        health,
+        trust,
+        manifest,
+        verdict,
+        original,
+        followup,
+        diagnosis,
+        admission,
+        promotion,
+        expected_git_sha=sha,
+        expected_source_run_id=source_run_id,
+        expected_followup_run_id=followup_run_id,
+    )
+    assert result["valid"] is True
+    assert result["status"] == STATUS
+    assert result["provider_admission_sha256"] == admission["admission_sha256"]
     print("follow-up trusted promotion verifier self-test OK")
 
 
