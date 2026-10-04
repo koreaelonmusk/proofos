@@ -38,8 +38,12 @@ PRIVILEGED_REQUIRED = (
     "- name: Independently rebuild authorized Trusted Promotion Proof",
     "build_trusted_promotion_proof.py",
     "verify_trusted_promotion_proof.py",
+    "- name: Independently rebuild authorized Follow-up Trusted Promotion Proof",
+    "build_followup_trusted_promotion.py",
+    "verify_followup_trusted_promotion.py",
     "AUTHORIZED_PROMOTION_SHA: ${{ needs.authorize.outputs.trusted_promotion_sha256 }}",
     '--source-run-id "$SOURCE_RUN_ID"',
+    '--followup-run-id "$FOLLOWUP_RUN_ID"',
 )
 FORBIDDEN_GLOBAL = (
     "secrets.PROOFOS_E2E_CALLER_ID_TOKEN",
@@ -99,20 +103,28 @@ def validate() -> list[str]:
         "Verify automatic provider diagnosis provenance",
         "vercel-trusted-diagnosis-",
         "vercel-trusted-followup-",
+        "vercel-provider-admission-",
         "verify_vercel_trusted_source_diagnosis.py",
+        "verify_vercel_provider_admission.py",
         '--followup-run-id "$FOLLOWUP_RUN_ID"',
         "followup_run_id",
         "Verify source evidence workflow identity",
         "Download sealed launch bundle with bounded retry",
         "uv run python scripts/download_run_artifact.py",
-        "- name: Build Trusted Promotion Proof when public observer is HOLD",
+        "- name: Build trusted promotion authority when public observer is HOLD",
         "--artifact \"vercel-trusted-source-$SOURCE_RUN_ID.json\"",
         "build_trusted_promotion_proof.py",
         "verify_trusted_promotion_proof.py",
+        "build_followup_trusted_promotion.py",
+        "verify_followup_trusted_promotion.py",
         "- name: Authorize privileged authenticated E2E",
         "uv run python scripts/authorize_authenticated_e2e.py",
         "--trusted-source",
         "--trusted-promotion",
+        "--followup-trusted-source",
+        "--provider-diagnosis",
+        "--provider-admission",
+        "--followup-promotion",
         '--source-run-id "$SOURCE_RUN_ID"',
         "authorized: ${{ steps.authorize.outputs.authorized }}",
         "target_origin: ${{ steps.authorize.outputs.target_origin }}",
@@ -156,7 +168,7 @@ def validate() -> list[str]:
     source = authorize.find("Verify source evidence workflow identity")
     download = authorize.find("Download sealed launch bundle with bounded retry")
     trusted_promotion = authorize.find(
-        "- name: Build Trusted Promotion Proof when public observer is HOLD"
+        "- name: Build trusted promotion authority when public observer is HOLD"
     )
     if min(gate, source, download, trusted_promotion) < 0 or not (
         source < download < trusted_promotion < gate
@@ -168,15 +180,18 @@ def validate() -> list[str]:
     rebuild = privileged.find(
         "- name: Independently rebuild authorized Trusted Promotion Proof"
     )
+    followup_rebuild = privileged.find(
+        "- name: Independently rebuild authorized Follow-up Trusted Promotion Proof"
+    )
     edge_oidc = privileged.find("- name: Mint short-lived Vercel Trusted Source identity")
     auth = privileged.find("uses: google-github-actions/auth@v3")
     collect = privileged.find("- name: Collect fresh authenticated signed evidence")
     promotion = privileged.find("- name: Cross-check authenticated evidence against sealed launch bundle")
-    if min(rebuild, edge_oidc, auth, collect, promotion) < 0 or not (
-        rebuild < edge_oidc < auth < collect < promotion
+    if min(rebuild, followup_rebuild, edge_oidc, auth, collect, promotion) < 0 or not (
+        rebuild < followup_rebuild < edge_oidc < auth < collect < promotion
     ):
         issues.append(
-            "trusted_rebuild_then_edge_oidc_then_google_oidc_then_collection_then_promotion_order_required"
+            "all_trusted_rebuilds_must_precede_identity_mint_and_authenticated_collection"
         )
 
     return issues
@@ -193,12 +208,12 @@ def main() -> int:
     print("Authenticated E2E workflow contract OK")
     print("- authorization job: no secrets, no OIDC permission")
     print("- sealed source run and evidence bundle: verified before authorization")
-    print("- privileged job: created only after direct READY or verified Trusted Promotion Proof")
+    print("- privileged job: created only after direct READY, legacy Trusted Promotion, or admitted follow-up Trusted Promotion")
     print("- Vercel edge: short-lived GitHub OIDC Trusted Source identity only")
     print("- ProofOS caller: short-lived Google WIF ID token only")
     print("- static Vercel bypass secret, stored caller token, and service-account JSON: forbidden")
     print("- automatic trigger: successful main-branch Trusted Source follow-up only")
-    print("- public HOLD: promotable only from run-bound same-run Trusted Source READY + anonymous-denied proof")
+    print("- public HOLD: promotable only from independently rebuilt legacy or Provider-Admission-backed follow-up proof")
     print("- authorization decision: sealed in an independently verified Trust Pipeline Receipt")
     print("- authenticated collection: cross-checked against sealed launch bundle")
     return 0

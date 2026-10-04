@@ -39,6 +39,7 @@ jobs:
       target_origin: ${{ steps.authorize.outputs.target_origin }}
       source_git_sha: ${{ steps.authorize.outputs.source_git_sha }}
       source_run_id: ${{ steps.authorize.outputs.source_run_id }}
+      followup_run_id: ${{ steps.authorize.outputs.followup_run_id }}
       manifest_sha256: ${{ steps.authorize.outputs.manifest_sha256 }}
       verdict_sha256: ${{ steps.authorize.outputs.verdict_sha256 }}
       authorization_basis: ${{ steps.authorize.outputs.authorization_basis }}
@@ -84,20 +85,32 @@ jobs:
             test "$(gh api "$api" --jq '.head_sha')" = "$AUTO_GIT_SHA"
             test "$(gh api "$api" --jq '.head_branch')" = "main"
 
-            artifact_name="$(gh api "$api/artifacts" --jq '
+            diagnosis_artifact="$(gh api "$api/artifacts" --jq '
               [.artifacts[].name
                | select(test("^vercel-trusted-diagnosis-[0-9]+\\.json$"))]
               | if length == 1 then .[0] else empty end
             ')"
-            [[ "$artifact_name" =~ ^vercel-trusted-diagnosis-([0-9]+)\.json$ ]] || {
+            [[ "$diagnosis_artifact" =~ ^vercel-trusted-diagnosis-([0-9]+)\.json$ ]] || {
               echo "exactly one run-bound provider diagnosis artifact is required"
               exit 1
             }
             run_id="${BASH_REMATCH[1]}"
+
+            admission_artifact="$(gh api "$api/artifacts" --jq --arg source "$run_id" '
+              [.artifacts[].name
+               | select(. == ("vercel-provider-admission-" + $source + ".json"))]
+              | if length == 1 then .[0] else empty end
+            ')"
+            test "$admission_artifact" = "vercel-provider-admission-$run_id.json" || {
+              echo "exactly one matching Provider Admission Contract is required"
+              exit 1
+            }
+
             git_sha="$AUTO_GIT_SHA"
             deployment_url=""
             echo "followup_run_id=$followup_run_id" >> "$GITHUB_OUTPUT"
-            echo "diagnosis_artifact=$artifact_name" >> "$GITHUB_OUTPUT"
+            echo "diagnosis_artifact=$diagnosis_artifact" >> "$GITHUB_OUTPUT"
+            echo "admission_artifact=$admission_artifact" >> "$GITHUB_OUTPUT"
           else
             run_id="$MANUAL_RUN_ID"
             git_sha="$MANUAL_GIT_SHA"
@@ -111,6 +124,7 @@ jobs:
           if [[ "$EVENT_NAME" != "workflow_run" ]]; then
             echo "followup_run_id=" >> "$GITHUB_OUTPUT"
             echo "diagnosis_artifact=" >> "$GITHUB_OUTPUT"
+            echo "admission_artifact=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Verify automatic provider diagnosis provenance
@@ -121,6 +135,7 @@ jobs:
           FOLLOWUP_RUN_ID: ${{ steps.source.outputs.followup_run_id }}
           SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
           DIAGNOSIS_ARTIFACT: ${{ steps.source.outputs.diagnosis_artifact }}
+          ADMISSION_ARTIFACT: ${{ steps.source.outputs.admission_artifact }}
         run: |
           set -euo pipefail
 
@@ -149,7 +164,21 @@ jobs:
             --source-run-id "$SOURCE_RUN_ID" \
             --followup-run-id "$FOLLOWUP_RUN_ID"
 
-          echo "automatic provider diagnosis provenance OK"
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$FOLLOWUP_RUN_ID" \
+            --artifact "$ADMISSION_ARTIFACT" \
+            --output "artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/verify_vercel_provider_admission.py \
+            "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --followup-run-id "$FOLLOWUP_RUN_ID"
+
+          echo "automatic provider diagnosis and admission provenance OK"
 
       - name: Verify source evidence workflow identity
         shell: bash
@@ -198,12 +227,13 @@ jobs:
             --artifact "vercel-launch-verdict-$SOURCE_RUN_ID.json" \
             --output "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json"
 
-      - name: Build Trusted Promotion Proof when public observer is HOLD
+      - name: Build trusted promotion authority when public observer is HOLD
         id: trusted-promotion
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          FOLLOWUP_RUN_ID: ${{ steps.source.outputs.followup_run_id }}
           EXPECTED_GIT_SHA: ${{ steps.source.outputs.git_sha }}
         run: |
           set -euo pipefail
@@ -211,6 +241,7 @@ jobs:
           status="$(jq -r '.status' "$verdict")"
           if [[ "$status" == "READY_FOR_AUTHENTICATED_E2E" ]]; then
             echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "mode=public" >> "$GITHUB_OUTPUT"
             echo "public launch verdict already authorizes authenticated E2E"
             exit 0
           fi
@@ -225,40 +256,87 @@ jobs:
           verified_trusted="$(uv run python scripts/verify_vercel_trusted_source_artifact.py \
             "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json")"
           trusted_outcome="$(jq -r '.outcome' <<<"$verified_trusted")"
-          if [[ "$trusted_outcome" != "TRUSTED_SOURCE_ACCEPTED_READY_AND_ANONYMOUS_DENIED" ]]; then
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "trusted_source_outcome=$trusted_outcome" >> "$GITHUB_OUTPUT"
-            echo "trusted source is valid but not promotable; keeping authenticated E2E on HOLD"
+
+          if [[ "$trusted_outcome" == "TRUSTED_SOURCE_ACCEPTED_READY_AND_ANONYMOUS_DENIED" ]]; then
+            uv run python scripts/build_trusted_promotion_proof.py \
+              "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
+              "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
+              "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
+              "$verdict" \
+              "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+              --expected-git-sha "$EXPECTED_GIT_SHA" \
+              --source-run-id "$SOURCE_RUN_ID" \
+              --output "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json"
+
+            uv run python scripts/verify_trusted_promotion_proof.py \
+              "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
+              "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
+              "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
+              "$verdict" \
+              "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+              "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json" \
+              --expected-git-sha "$EXPECTED_GIT_SHA" \
+              --source-run-id "$SOURCE_RUN_ID"
+
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "mode=direct" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          uv run python scripts/build_trusted_promotion_proof.py \
-            "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
-            "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
-            "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
-            "$verdict" \
-            "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json" \
-            --expected-git-sha "$EXPECTED_GIT_SHA" \
-            --source-run-id "$SOURCE_RUN_ID" \
-            --output "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json"
+          admission="artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json"
+          if [[ -f "$admission" ]]; then
+            admission_status="$(jq -r '.status' "$admission")"
+            if [[ "$admission_status" == "ADMITTED_FOR_TRUSTED_PROMOTION" ]]; then
+              [[ "$FOLLOWUP_RUN_ID" =~ ^[0-9]+$ ]] || {
+                echo "admitted follow-up promotion requires follow-up run ID"
+                exit 1
+              }
+              uv run python scripts/build_followup_trusted_promotion.py \
+                "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
+                "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
+                "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
+                "$verdict" \
+                "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+                "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+                "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+                "$admission" \
+                --expected-git-sha "$EXPECTED_GIT_SHA" \
+                --source-run-id "$SOURCE_RUN_ID" \
+                --followup-run-id "$FOLLOWUP_RUN_ID" \
+                --output "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json"
 
-          uv run python scripts/verify_trusted_promotion_proof.py \
-            "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
-            "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
-            "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
-            "$verdict" \
-            "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json" \
-            "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json" \
-            --expected-git-sha "$EXPECTED_GIT_SHA" \
-            --source-run-id "$SOURCE_RUN_ID"
+              uv run python scripts/verify_followup_trusted_promotion.py \
+                "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
+                "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
+                "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
+                "$verdict" \
+                "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+                "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+                "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+                "$admission" \
+                "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json" \
+                --expected-git-sha "$EXPECTED_GIT_SHA" \
+                --source-run-id "$SOURCE_RUN_ID" \
+                --followup-run-id "$FOLLOWUP_RUN_ID"
 
-          echo "available=true" >> "$GITHUB_OUTPUT"
+              echo "available=true" >> "$GITHUB_OUTPUT"
+              echo "mode=followup" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "provider_admission_status=$admission_status" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          echo "mode=hold" >> "$GITHUB_OUTPUT"
+          echo "trusted_source_outcome=$trusted_outcome" >> "$GITHUB_OUTPUT"
+          echo "no promotable trust path; keeping authenticated E2E on HOLD"
 
       - name: Authorize privileged authenticated E2E
         id: authorize
         shell: bash
         env:
           SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          FOLLOWUP_RUN_ID: ${{ steps.source.outputs.followup_run_id }}
           DEPLOYMENT_URL: ${{ steps.source.outputs.deployment_url }}
           EXPECTED_GIT_SHA: ${{ steps.source.outputs.git_sha }}
         run: |
@@ -278,6 +356,16 @@ jobs:
               --trusted-promotion "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json"
             )
           fi
+          if [[ -f "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json" ]]; then
+            args+=(
+              --trusted-source "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json"
+              --followup-trusted-source "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json"
+              --provider-diagnosis "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json"
+              --provider-admission "artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json"
+              --followup-promotion "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json"
+              --followup-run-id "$FOLLOWUP_RUN_ID"
+            )
+          fi
           result="$(uv run python scripts/authorize_authenticated_e2e.py "${args[@]}")"
           echo "$result"
           mkdir -p artifacts/trust-pipeline
@@ -290,6 +378,7 @@ jobs:
           echo "target_origin=$(jq -r '.target_origin' <<<"$result")" >> "$GITHUB_OUTPUT"
           echo "source_git_sha=$(jq -r '.workflow_source_git_sha' <<<"$result")" >> "$GITHUB_OUTPUT"
           echo "source_run_id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "followup_run_id=$(jq -r '.followup_run_id // ""' <<<"$result")" >> "$GITHUB_OUTPUT"
           echo "manifest_sha256=$(jq -r '.manifest_sha256' <<<"$result")" >> "$GITHUB_OUTPUT"
           echo "verdict_sha256=$(jq -r '.verdict_sha256' <<<"$result")" >> "$GITHUB_OUTPUT"
           echo "authorization_basis=$(jq -r '.authorization_basis' <<<"$result")" >> "$GITHUB_OUTPUT"
@@ -440,6 +529,81 @@ jobs:
           test "$rebuilt" = "$AUTHORIZED_PROMOTION_SHA"
           echo "trusted promotion proof independently rebuilt and matched authorization"
 
+      - name: Independently rebuild authorized Follow-up Trusted Promotion Proof
+        if: needs.authorize.outputs.authorization_basis == 'followup_trusted_promotion_proof'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
+          FOLLOWUP_RUN_ID: ${{ needs.authorize.outputs.followup_run_id }}
+          EXPECTED_GIT_SHA: ${{ needs.authorize.outputs.source_git_sha }}
+          AUTHORIZED_PROMOTION_SHA: ${{ needs.authorize.outputs.trusted_promotion_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$FOLLOWUP_RUN_ID" =~ ^[0-9]+$ ]] || {
+            echo "authorized follow-up promotion requires follow-up run ID"
+            exit 1
+          }
+
+          mkdir -p artifacts/launch-gate/provider
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$FOLLOWUP_RUN_ID" \
+            --artifact "vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$FOLLOWUP_RUN_ID" \
+            --artifact "vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$FOLLOWUP_RUN_ID" \
+            --artifact "vercel-provider-admission-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/build_followup_trusted_promotion.py \
+            "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json" \
+            --expected-git-sha "$EXPECTED_GIT_SHA" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --followup-run-id "$FOLLOWUP_RUN_ID" \
+            --output "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/verify_followup_trusted_promotion.py \
+            "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json" \
+            --expected-git-sha "$EXPECTED_GIT_SHA" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --followup-run-id "$FOLLOWUP_RUN_ID"
+
+          rebuilt="$(jq -r '.promotion_sha256' "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json")"
+          test -n "$AUTHORIZED_PROMOTION_SHA"
+          test "$rebuilt" = "$AUTHORIZED_PROMOTION_SHA"
+          echo "follow-up trusted promotion independently rebuilt and matched authorization"
+
       - name: Mint short-lived Vercel Trusted Source identity
         id: vercel-oidc
         uses: actions/github-script@v7
@@ -482,6 +646,7 @@ jobs:
         env:
           PROOFOS_E2E_COLLECTOR_PUBLIC_KEY: ${{ secrets.PROOFOS_E2E_COLLECTOR_PUBLIC_KEY }}
           SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
+          FOLLOWUP_RUN_ID: ${{ needs.authorize.outputs.followup_run_id }}
           EXPECTED_GIT_SHA: ${{ needs.authorize.outputs.source_git_sha }}
         run: |
           args=(
@@ -498,6 +663,16 @@ jobs:
             args+=(
               --trusted-source "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json"
               --trusted-promotion "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json"
+            )
+          fi
+          if [[ -f "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json" ]]; then
+            args+=(
+              --trusted-source "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json"
+              --followup-trusted-source "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json"
+              --provider-diagnosis "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json"
+              --provider-admission "artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json"
+              --followup-promotion "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json"
+              --followup-run-id "$FOLLOWUP_RUN_ID"
             )
           fi
           uv run python scripts/verify_authenticated_e2e_promotion.py "${args[@]}"

@@ -32,8 +32,12 @@ from verify_trusted_promotion_proof import (
     TrustedPromotionVerificationError,
     verify_promotion as verify_trusted_promotion,
 )
+from verify_followup_trusted_promotion import (
+    FollowupTrustedPromotionVerificationError,
+    verify_followup_promotion,
+)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 KIND = "proofos-authenticated-e2e-promotion"
 PROMOTED = "AUTHENTICATED_E2E_VERIFIED"
 HOLD = "HOLD"
@@ -59,7 +63,12 @@ def verify_promotion(
     expected_git_sha: str = "",
     trusted_source: Any | None = None,
     trusted_promotion: Any | None = None,
+    followup_trusted_source: Any | None = None,
+    provider_diagnosis: Any | None = None,
+    provider_admission: Any | None = None,
+    followup_promotion: Any | None = None,
     source_run_id: int = 0,
+    followup_run_id: int = 0,
 ) -> dict[str, Any]:
     try:
         launch = verify_verdict(
@@ -97,10 +106,29 @@ def verify_promotion(
     trusted_promotion_sha256 = None
     authority_ready = launch["status"] == "READY_FOR_AUTHENTICATED_E2E"
 
-    if not authority_ready and (trusted_source is not None or trusted_promotion is not None):
-        if trusted_source is None or trusted_promotion is None:
+    legacy_requested = trusted_promotion is not None
+    followup_requested = any(
+        item is not None
+        for item in (
+            followup_trusted_source,
+            provider_diagnosis,
+            provider_admission,
+            followup_promotion,
+        )
+    )
+    if (
+        trusted_source is not None
+        and not legacy_requested
+        and not followup_requested
+    ):
+        raise PromotionVerificationError(
+            "trusted source cannot be supplied without a promotion proof path"
+        )
+
+    if not authority_ready and legacy_requested:
+        if trusted_source is None:
             raise PromotionVerificationError(
-                "trusted source and trusted promotion proof must be supplied together"
+                "legacy trusted promotion requires the trusted source constituent"
             )
         try:
             promoted = verify_trusted_promotion(
@@ -127,6 +155,57 @@ def verify_promotion(
             )
         authority_ready = promoted["status"] == "AUTHORIZED_FOR_AUTHENTICATED_E2E"
         authorization_basis = "trusted_promotion_proof"
+        trusted_promotion_sha256 = promoted["promotion_sha256"]
+
+    followup_inputs = (
+        followup_trusted_source,
+        provider_diagnosis,
+        provider_admission,
+        followup_promotion,
+    )
+    if not authority_ready and followup_requested:
+        if trusted_source is None or any(item is None for item in followup_inputs):
+            raise PromotionVerificationError(
+                "original Trusted Source, follow-up Trusted Source, provider diagnosis, "
+                "provider admission, and follow-up promotion must be supplied together"
+            )
+        if (
+            not isinstance(followup_run_id, int)
+            or isinstance(followup_run_id, bool)
+            or followup_run_id <= 0
+        ):
+            raise PromotionVerificationError(
+                "follow-up promotion requires a positive follow-up run id"
+            )
+        try:
+            promoted = verify_followup_promotion(
+                health_evidence,
+                trust_evidence,
+                manifest,
+                launch_verdict,
+                trusted_source,
+                followup_trusted_source,
+                provider_diagnosis,
+                provider_admission,
+                followup_promotion,
+                expected_git_sha=expected_git_sha,
+                expected_source_run_id=source_run_id,
+                expected_followup_run_id=followup_run_id,
+            )
+        except FollowupTrustedPromotionVerificationError as exc:
+            raise PromotionVerificationError(
+                f"follow-up trusted promotion proof invalid: {exc}"
+            ) from exc
+        if promoted["target_origin"] != launch["target_origin"]:
+            raise PromotionVerificationError(
+                "follow-up trusted promotion and launch target different origins"
+            )
+        if promoted["workflow_source_git_sha"] != launch["workflow_source_git_sha"]:
+            raise PromotionVerificationError(
+                "follow-up trusted promotion and launch bind to different Git SHAs"
+            )
+        authority_ready = promoted["status"] == "AUTHORIZED_FOR_AUTHENTICATED_E2E"
+        authorization_basis = "followup_trusted_promotion_proof"
         trusted_promotion_sha256 = promoted["promotion_sha256"]
 
     if not authority_ready:
@@ -157,7 +236,10 @@ def verify_promotion(
             [
                 (
                     "trusted_source_pre_auth_boundary_observed"
-                    if authorization_basis == "trusted_promotion_proof"
+                    if authorization_basis in {
+                        "trusted_promotion_proof",
+                        "followup_trusted_promotion_proof",
+                    }
                     else "pre_auth_health_observed"
                 ),
                 "collector_readiness_observed",
@@ -203,6 +285,7 @@ def verify_promotion(
         "authorization_basis": authorization_basis,
         "trusted_promotion_sha256": trusted_promotion_sha256,
         "source_run_id": source_run_id if source_run_id > 0 else None,
+        "followup_run_id": followup_run_id if followup_run_id > 0 else None,
         "authenticated_evidence_sha256": auth_digest.lower(),
         "collector_id": authenticated["collector_id"],
         "attestation_outcome": authenticated["attestation_outcome"],
@@ -341,6 +424,61 @@ def _self_test() -> None:
             pass
         else:
             raise AssertionError("cross-deployment authenticated evidence was accepted")
+
+        from build_followup_trusted_promotion import (
+            _fixture as _followup_fixture,
+            derive_followup_promotion,
+        )
+
+        (
+            f_health,
+            f_trust,
+            f_manifest,
+            f_verdict,
+            f_original,
+            f_followup,
+            f_diagnosis,
+            f_admission,
+            f_sha,
+            f_source_run_id,
+            f_followup_run_id,
+        ) = _followup_fixture()
+        f_promotion = derive_followup_promotion(
+            f_health,
+            f_trust,
+            f_manifest,
+            f_verdict,
+            f_original,
+            f_followup,
+            f_diagnosis,
+            f_admission,
+            expected_git_sha=f_sha,
+            source_run_id=f_source_run_id,
+            followup_run_id=f_followup_run_id,
+        )
+        f_authenticated = _auth_fixture(
+            f_verdict["target_origin"],
+            f_sha,
+            healthy=True,
+        )
+        f_promoted = verify_promotion(
+            f_health,
+            f_trust,
+            f_manifest,
+            f_verdict,
+            f_authenticated,
+            expected_git_sha=f_sha,
+            trusted_source=f_original,
+            followup_trusted_source=f_followup,
+            provider_diagnosis=f_diagnosis,
+            provider_admission=f_admission,
+            followup_promotion=f_promotion,
+            source_run_id=f_source_run_id,
+            followup_run_id=f_followup_run_id,
+        )
+        assert f_promoted["status"] == PROMOTED
+        assert f_promoted["authorization_basis"] == "followup_trusted_promotion_proof"
+        assert f_promoted["followup_run_id"] == f_followup_run_id
     finally:
         os.environ.pop(PUBLIC_KEY_ENV, None)
 
@@ -356,7 +494,12 @@ def main() -> int:
     parser.add_argument("authenticated_evidence", nargs="?", type=Path)
     parser.add_argument("--trusted-source", type=Path)
     parser.add_argument("--trusted-promotion", type=Path)
+    parser.add_argument("--followup-trusted-source", type=Path)
+    parser.add_argument("--provider-diagnosis", type=Path)
+    parser.add_argument("--provider-admission", type=Path)
+    parser.add_argument("--followup-promotion", type=Path)
     parser.add_argument("--source-run-id", type=int, default=0)
+    parser.add_argument("--followup-run-id", type=int, default=0)
     parser.add_argument("--expected-git-sha", default="")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--self-test", action="store_true")
@@ -404,7 +547,28 @@ def main() -> int:
                 if args.trusted_promotion is not None
                 else None
             ),
+            followup_trusted_source=(
+                json.loads(args.followup_trusted_source.read_text(encoding="utf-8"))
+                if args.followup_trusted_source is not None
+                else None
+            ),
+            provider_diagnosis=(
+                json.loads(args.provider_diagnosis.read_text(encoding="utf-8"))
+                if args.provider_diagnosis is not None
+                else None
+            ),
+            provider_admission=(
+                json.loads(args.provider_admission.read_text(encoding="utf-8"))
+                if args.provider_admission is not None
+                else None
+            ),
+            followup_promotion=(
+                json.loads(args.followup_promotion.read_text(encoding="utf-8"))
+                if args.followup_promotion is not None
+                else None
+            ),
             source_run_id=args.source_run_id,
+            followup_run_id=args.followup_run_id,
         )
     except (OSError, json.JSONDecodeError, PromotionVerificationError) as exc:
         print(f"authenticated E2E promotion INVALID: {exc}", file=sys.stderr)
