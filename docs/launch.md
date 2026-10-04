@@ -273,6 +273,44 @@ used by a future Trusted Promotion bridge. The contract is independently
 re-derived before persistence and contains no raw token or provider response
 body.
 
+### Follow-up Trusted Promotion Bridge
+
+The legacy Trusted Promotion Proof remains bound to the original
+`deployment_status` Trusted Source plane. ProofOS does not silently broaden
+that proof to accept a different identity plane.
+
+Instead, a separate follow-up promotion proof bridges an independently verified
+Provider Admission Contract into the next authenticated evidence step. It
+requires all of the following to be re-verified together:
+
+- the public health/trust/manifest/verdict bundle remains an edge-only
+  production `HOLD`;
+- the original `deployment_status` Trusted Source observation;
+- the main-ref `workflow_run` Trusted Source follow-up observation;
+- the run-bound provider diagnosis;
+- a Provider Admission Contract whose status is exactly
+  `ADMITTED_FOR_TRUSTED_PROMOTION`;
+- the exact source and follow-up GitHub Actions run IDs.
+
+The resulting `proofos-followup-trusted-promotion-proof` is content-addressed
+and authorizes only the next authenticated E2E evidence step. The public launch
+verdict remains `HOLD`.
+
+The credential-free authorization job independently verifies this proof before
+it can return `authorized=true`. If that happens, the privileged job downloads
+the original source and follow-up artifacts again and independently rebuilds the
+same promotion. The rebuilt promotion SHA-256 must equal the hash authorized by
+the credential-free job before either the Vercel edge OIDC identity or Google
+WIF caller identity can be minted.
+
+This keeps the two trust planes explicit:
+
+`deployment_status legacy proof` and
+`workflow_run + Provider Admission follow-up proof`
+
+are separate admissible paths with independent verification rules. Neither path
+is a production GO decision.
+
 ### Trusted Promotion Proof
 
 `build_trusted_promotion_proof.py` is a narrow authority bridge, not a second
@@ -354,11 +392,12 @@ re-derive the exact decision without trusting workflow logs.
 
 ### Automatic authenticated-E2E promotion
 
-The workflow also subscribes to completed `Vercel Live Smoke Evidence` runs.
-Automatic promotion is accepted only when the source run completed successfully
-and its `head_branch` is exactly `main`. Pull-request previews therefore cannot
-open the OIDC-capable job, even if they can produce a syntactically valid evidence
-bundle.
+The workflow subscribes to completed `Vercel Trusted Source Follow-up` runs,
+not directly to live-smoke completion. The follow-up must complete successfully
+on `main` and publish the run-bound diagnosis and Provider Admission artifacts
+before the credential-free E2E authorization job evaluates either Trusted
+Promotion path. Pull-request previews therefore cannot open the OIDC-capable
+job, even if they can produce a syntactically valid evidence bundle.
 
 The credential-free `authorize` job resolves the source run ID and Git SHA from
 the immutable `workflow_run` event, re-checks the source workflow identity with
