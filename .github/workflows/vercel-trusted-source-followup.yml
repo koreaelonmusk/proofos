@@ -213,11 +213,41 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Build and independently verify Provider Admission Contract
+        env:
+          SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          python scripts/build_vercel_provider_admission.py \
+            "artifacts/trusted-followup/original/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/trusted-followup/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            "artifacts/trusted-followup/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --followup-run-id "$GITHUB_RUN_ID" \
+            --output "artifacts/trusted-followup/vercel-provider-admission-$SOURCE_RUN_ID.json"
+
+          python scripts/verify_vercel_provider_admission.py \
+            "artifacts/trusted-followup/original/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/trusted-followup/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            "artifacts/trusted-followup/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+            "artifacts/trusted-followup/vercel-provider-admission-$SOURCE_RUN_ID.json" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --followup-run-id "$GITHUB_RUN_ID"
+
       - name: Upload Trusted Source provider diagnosis
         uses: actions/upload-artifact@v7
         with:
           name: vercel-trusted-diagnosis-${{ needs.authorize.outputs.source_run_id }}.json
           path: artifacts/trusted-followup/vercel-trusted-diagnosis-${{ needs.authorize.outputs.source_run_id }}.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Provider Admission Contract
+        uses: actions/upload-artifact@v7
+        with:
+          name: vercel-provider-admission-${{ needs.authorize.outputs.source_run_id }}.json
+          path: artifacts/trusted-followup/vercel-provider-admission-${{ needs.authorize.outputs.source_run_id }}.json
           archive: false
           if-no-files-found: error
           retention-days: 30

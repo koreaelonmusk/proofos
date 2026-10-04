@@ -207,6 +207,8 @@ jobs:
           uv run python scripts/verify_vercel_trusted_source.py --self-test
           uv run python scripts/verify_vercel_trusted_source_artifact.py --self-test
           uv run python scripts/build_vercel_trusted_source_diagnosis.py --self-test
+          uv run python scripts/build_vercel_provider_admission.py --self-test
+          uv run python scripts/verify_vercel_provider_admission.py --self-test
       - name: Validate Trusted Promotion Proof
         run: |
           uv run python scripts/build_trusted_promotion_proof.py --self-test
