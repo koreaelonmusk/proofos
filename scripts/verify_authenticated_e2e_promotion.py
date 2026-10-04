@@ -106,10 +106,29 @@ def verify_promotion(
     trusted_promotion_sha256 = None
     authority_ready = launch["status"] == "READY_FOR_AUTHENTICATED_E2E"
 
-    if not authority_ready and (trusted_source is not None or trusted_promotion is not None):
-        if trusted_source is None or trusted_promotion is None:
+    legacy_requested = trusted_promotion is not None
+    followup_requested = any(
+        item is not None
+        for item in (
+            followup_trusted_source,
+            provider_diagnosis,
+            provider_admission,
+            followup_promotion,
+        )
+    )
+    if (
+        trusted_source is not None
+        and not legacy_requested
+        and not followup_requested
+    ):
+        raise PromotionVerificationError(
+            "trusted source cannot be supplied without a promotion proof path"
+        )
+
+    if not authority_ready and legacy_requested:
+        if trusted_source is None:
             raise PromotionVerificationError(
-                "trusted source and trusted promotion proof must be supplied together"
+                "legacy trusted promotion requires the trusted source constituent"
             )
         try:
             promoted = verify_trusted_promotion(
@@ -144,11 +163,11 @@ def verify_promotion(
         provider_admission,
         followup_promotion,
     )
-    if not authority_ready and any(item is not None for item in followup_inputs):
-        if any(item is None for item in followup_inputs):
+    if not authority_ready and followup_requested:
+        if trusted_source is None or any(item is None for item in followup_inputs):
             raise PromotionVerificationError(
-                "follow-up Trusted Source, provider diagnosis, provider admission, "
-                "and follow-up promotion must be supplied together"
+                "original Trusted Source, follow-up Trusted Source, provider diagnosis, "
+                "provider admission, and follow-up promotion must be supplied together"
             )
         if (
             not isinstance(followup_run_id, int)
