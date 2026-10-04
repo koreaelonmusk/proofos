@@ -21,6 +21,10 @@ from verify_trusted_promotion_proof import (
     TrustedPromotionVerificationError,
     verify_promotion as verify_trusted_promotion,
 )
+from verify_followup_trusted_promotion import (
+    FollowupTrustedPromotionVerificationError,
+    verify_followup_promotion,
+)
 
 READY = "READY_FOR_AUTHENTICATED_E2E"
 TRUSTED_PROMOTED = "AUTHORIZED_FOR_AUTHENTICATED_E2E"
@@ -59,7 +63,12 @@ def authorize(
     deployment_url: str,
     trusted_source: Any | None = None,
     trusted_promotion: Any | None = None,
+    followup_trusted_source: Any | None = None,
+    provider_diagnosis: Any | None = None,
+    provider_admission: Any | None = None,
+    followup_promotion: Any | None = None,
     source_run_id: int = 0,
+    followup_run_id: int = 0,
 ) -> dict[str, Any]:
     try:
         verified = verify_verdict(
@@ -120,12 +129,65 @@ def authorize(
         authorization_basis = "trusted_promotion_proof"
         promotion_sha256 = promoted["promotion_sha256"]
 
+    followup_inputs = (
+        followup_trusted_source,
+        provider_diagnosis,
+        provider_admission,
+        followup_promotion,
+    )
+    if not authorized and any(item is not None for item in followup_inputs):
+        if any(item is None for item in followup_inputs):
+            raise E2EAuthorizationError(
+                "follow-up Trusted Source, provider diagnosis, provider admission, "
+                "and follow-up promotion must be supplied together"
+            )
+        if (
+            not isinstance(followup_run_id, int)
+            or isinstance(followup_run_id, bool)
+            or followup_run_id <= 0
+        ):
+            raise E2EAuthorizationError(
+                "follow-up promotion requires a positive follow-up run id"
+            )
+        try:
+            promoted = verify_followup_promotion(
+                health,
+                trust,
+                manifest,
+                verdict,
+                trusted_source,
+                followup_trusted_source,
+                provider_diagnosis,
+                provider_admission,
+                followup_promotion,
+                expected_git_sha=expected_git_sha,
+                expected_source_run_id=source_run_id,
+                expected_followup_run_id=followup_run_id,
+            )
+        except FollowupTrustedPromotionVerificationError as exc:
+            raise E2EAuthorizationError(
+                f"follow-up trusted promotion proof is invalid: {exc}"
+            ) from exc
+        if promoted["target_origin"] != verified["target_origin"]:
+            raise E2EAuthorizationError(
+                "follow-up trusted promotion targets a different deployment origin"
+            )
+        if promoted["workflow_source_git_sha"] != verified["workflow_source_git_sha"]:
+            raise E2EAuthorizationError(
+                "follow-up trusted promotion binds to a different Git SHA"
+            )
+        authorized = promoted["status"] == TRUSTED_PROMOTED
+        status = promoted["status"]
+        authorization_basis = "followup_trusted_promotion_proof"
+        promotion_sha256 = promoted["promotion_sha256"]
+
     return {
         "authorized": authorized,
         "status": status,
         "authorization_basis": authorization_basis,
         "trusted_promotion_sha256": promotion_sha256,
         "source_run_id": source_run_id if source_run_id > 0 else None,
+        "followup_run_id": followup_run_id if followup_run_id > 0 else None,
         "target_origin": verified["target_origin"],
         "workflow_source_git_sha": verified["workflow_source_git_sha"],
         "github_deployment_id": verified["github_deployment_id"],
@@ -202,6 +264,56 @@ def _self_test() -> None:
     assert automatic["authorized"] is True
     assert automatic["target_origin"] == origin
 
+    from build_followup_trusted_promotion import (
+        _fixture as _followup_fixture,
+        derive_followup_promotion,
+    )
+
+    (
+        f_health,
+        f_trust,
+        f_manifest,
+        f_verdict,
+        f_original,
+        f_followup,
+        f_diagnosis,
+        f_admission,
+        f_sha,
+        f_source_run_id,
+        f_followup_run_id,
+    ) = _followup_fixture()
+    f_promotion = derive_followup_promotion(
+        f_health,
+        f_trust,
+        f_manifest,
+        f_verdict,
+        f_original,
+        f_followup,
+        f_diagnosis,
+        f_admission,
+        expected_git_sha=f_sha,
+        source_run_id=f_source_run_id,
+        followup_run_id=f_followup_run_id,
+    )
+    promoted = authorize(
+        f_health,
+        f_trust,
+        f_manifest,
+        f_verdict,
+        expected_git_sha=f_sha,
+        deployment_url="",
+        trusted_source=f_original,
+        followup_trusted_source=f_followup,
+        provider_diagnosis=f_diagnosis,
+        provider_admission=f_admission,
+        followup_promotion=f_promotion,
+        source_run_id=f_source_run_id,
+        followup_run_id=f_followup_run_id,
+    )
+    assert promoted["authorized"] is True
+    assert promoted["authorization_basis"] == "followup_trusted_promotion_proof"
+    assert promoted["followup_run_id"] == f_followup_run_id
+
     try:
         authorize(
             ready_health,
@@ -236,7 +348,12 @@ def main() -> int:
     parser.add_argument("verdict", nargs="?", type=Path)
     parser.add_argument("--trusted-source", type=Path)
     parser.add_argument("--trusted-promotion", type=Path)
+    parser.add_argument("--followup-trusted-source", type=Path)
+    parser.add_argument("--provider-diagnosis", type=Path)
+    parser.add_argument("--provider-admission", type=Path)
+    parser.add_argument("--followup-promotion", type=Path)
     parser.add_argument("--source-run-id", type=int, default=0)
+    parser.add_argument("--followup-run-id", type=int, default=0)
     parser.add_argument("--expected-git-sha", default="")
     parser.add_argument("--deployment-url", default="")
     parser.add_argument("--self-test", action="store_true")
@@ -269,7 +386,28 @@ def main() -> int:
                 if args.trusted_promotion is not None
                 else None
             ),
+            followup_trusted_source=(
+                _load(args.followup_trusted_source)
+                if args.followup_trusted_source is not None
+                else None
+            ),
+            provider_diagnosis=(
+                _load(args.provider_diagnosis)
+                if args.provider_diagnosis is not None
+                else None
+            ),
+            provider_admission=(
+                _load(args.provider_admission)
+                if args.provider_admission is not None
+                else None
+            ),
+            followup_promotion=(
+                _load(args.followup_promotion)
+                if args.followup_promotion is not None
+                else None
+            ),
             source_run_id=args.source_run_id,
+            followup_run_id=args.followup_run_id,
         )
     except E2EAuthorizationError as exc:
         print(f"authenticated E2E AUTHORIZATION INVALID: {exc}", file=sys.stderr)
