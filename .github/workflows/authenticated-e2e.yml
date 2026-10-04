@@ -494,6 +494,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
+          FOLLOWUP_RUN_ID: ${{ needs.authorize.outputs.followup_run_id }}
           EXPECTED_GIT_SHA: ${{ needs.authorize.outputs.source_git_sha }}
           AUTHORIZED_PROMOTION_SHA: ${{ needs.authorize.outputs.trusted_promotion_sha256 }}
         run: |
@@ -528,6 +529,81 @@ jobs:
           test -n "$AUTHORIZED_PROMOTION_SHA"
           test "$rebuilt" = "$AUTHORIZED_PROMOTION_SHA"
           echo "trusted promotion proof independently rebuilt and matched authorization"
+
+      - name: Independently rebuild authorized Follow-up Trusted Promotion Proof
+        if: needs.authorize.outputs.authorization_basis == 'followup_trusted_promotion_proof'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
+          FOLLOWUP_RUN_ID: ${{ needs.authorize.outputs.followup_run_id }}
+          EXPECTED_GIT_SHA: ${{ needs.authorize.outputs.source_git_sha }}
+          AUTHORIZED_PROMOTION_SHA: ${{ needs.authorize.outputs.trusted_promotion_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$FOLLOWUP_RUN_ID" =~ ^[0-9]+$ ]] || {
+            echo "authorized follow-up promotion requires follow-up run ID"
+            exit 1
+          }
+
+          mkdir -p artifacts/launch-gate/provider
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$SOURCE_RUN_ID" \
+            --artifact "vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$FOLLOWUP_RUN_ID" \
+            --artifact "vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$FOLLOWUP_RUN_ID" \
+            --artifact "vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/download_run_artifact.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$FOLLOWUP_RUN_ID" \
+            --artifact "vercel-provider-admission-$SOURCE_RUN_ID.json" \
+            --output "artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/build_followup_trusted_promotion.py \
+            "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json" \
+            --expected-git-sha "$EXPECTED_GIT_SHA" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --followup-run-id "$FOLLOWUP_RUN_ID" \
+            --output "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json"
+
+          uv run python scripts/verify_followup_trusted_promotion.py \
+            "artifacts/launch-gate/health/vercel-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/trust/vercel-trust-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/manifest/vercel-manifest-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/verdict/vercel-launch-verdict-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json" \
+            "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json" \
+            --expected-git-sha "$EXPECTED_GIT_SHA" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --followup-run-id "$FOLLOWUP_RUN_ID"
+
+          rebuilt="$(jq -r '.promotion_sha256' "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json")"
+          test -n "$AUTHORIZED_PROMOTION_SHA"
+          test "$rebuilt" = "$AUTHORIZED_PROMOTION_SHA"
+          echo "follow-up trusted promotion independently rebuilt and matched authorization"
 
       - name: Mint short-lived Vercel Trusted Source identity
         id: vercel-oidc
@@ -587,6 +663,16 @@ jobs:
             args+=(
               --trusted-source "artifacts/launch-gate/trusted/vercel-trusted-source-$SOURCE_RUN_ID.json"
               --trusted-promotion "artifacts/launch-gate/trusted-promotion-$SOURCE_RUN_ID.json"
+            )
+          fi
+          if [[ -f "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json" ]]; then
+            args+=(
+              --trusted-source "artifacts/launch-gate/provider/vercel-trusted-source-$SOURCE_RUN_ID.json"
+              --followup-trusted-source "artifacts/launch-gate/provider/vercel-trusted-followup-$SOURCE_RUN_ID.json"
+              --provider-diagnosis "artifacts/launch-gate/provider/vercel-trusted-diagnosis-$SOURCE_RUN_ID.json"
+              --provider-admission "artifacts/launch-gate/provider/vercel-provider-admission-$SOURCE_RUN_ID.json"
+              --followup-promotion "artifacts/launch-gate/followup-trusted-promotion-$SOURCE_RUN_ID.json"
+              --followup-run-id "$FOLLOWUP_RUN_ID"
             )
           fi
           uv run python scripts/verify_authenticated_e2e_promotion.py "${args[@]}"
