@@ -494,7 +494,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
-          FOLLOWUP_RUN_ID: ${{ needs.authorize.outputs.followup_run_id }}
           EXPECTED_GIT_SHA: ${{ needs.authorize.outputs.source_git_sha }}
           AUTHORIZED_PROMOTION_SHA: ${{ needs.authorize.outputs.trusted_promotion_sha256 }}
         run: |
@@ -647,6 +646,7 @@ jobs:
         env:
           PROOFOS_E2E_COLLECTOR_PUBLIC_KEY: ${{ secrets.PROOFOS_E2E_COLLECTOR_PUBLIC_KEY }}
           SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
+          FOLLOWUP_RUN_ID: ${{ needs.authorize.outputs.followup_run_id }}
           EXPECTED_GIT_SHA: ${{ needs.authorize.outputs.source_git_sha }}
         run: |
           args=(
