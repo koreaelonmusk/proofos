@@ -152,7 +152,10 @@ class WitnessQuorumTests(unittest.TestCase):
             self.signers["witness-a"].public_key_b64(),
             "witness-b",
         )
-        with self.assertRaisesRegex(WitnessQuorumPolicyError, "share one Ed25519 public key"):
+        with self.assertRaisesRegex(
+            WitnessQuorumPolicyError,
+            "does not match the pinned quorum policy",
+        ):
             self.evaluate([], verifiers=verifiers)
 
     def test_policy_rejects_two_labels_bound_to_one_public_key(self):
