@@ -1,23 +1,21 @@
-"""N-of-M quorum evaluation for independently signed witness receipts.
+"""Pinned N-of-M quorum over independently signed witness receipts.
 
-Quorum is a transparency property, not a completion verdict. It answers only:
-"Did enough distinct, registered witnesses independently sign the same exact
-checkpoint commitment?"
+Quorum is transparency evidence, never a ProofOS completion verdict. It answers
+only whether enough distinct configured witnesses accepted the same checkpoint
+commitment.
 
-Rules:
-- only registered witness identities count;
-- one witness counts at most once, regardless of how many receipts it submits;
-- every counted receipt must verify against its witness record;
-- all counted receipts must bind to the same operation, execution, checkpoint
-  version, and checkpoint digest;
-- conflicting receipts from one witness or across witnesses fail closed.
+The quorum policy is content-addressed and callers must supply the externally
+pinned expected digest. A runtime actor therefore cannot silently downgrade
+2-of-3 into 1-of-1 and still produce an accepted quorum result.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Iterable, Mapping
 
+from .integrity import content_hash
 from .witness import WitnessRecord
 from .witness_receipt import WitnessReceipt, WitnessReceiptVerifier
 
@@ -26,20 +24,50 @@ class WitnessQuorumError(ValueError):
     """Base class for quorum refusal."""
 
 
-class InvalidQuorumPolicy(WitnessQuorumError):
+class WitnessQuorumPolicyError(WitnessQuorumError):
     pass
 
 
-class UnknownWitnessError(WitnessQuorumError):
+class WitnessQuorumScopeError(WitnessQuorumError):
     pass
 
 
-class WitnessReceiptConflictError(WitnessQuorumError):
-    pass
+class WitnessQuorumState(StrEnum):
+    QUORUM = "QUORUM"
+    INSUFFICIENT = "INSUFFICIENT"
+    SPLIT_VIEW = "SPLIT_VIEW"
 
 
-class WitnessQuorumNotMet(WitnessQuorumError):
-    pass
+@dataclass(frozen=True)
+class WitnessQuorumPolicy:
+    policy_id: str
+    witness_ids: tuple[str, ...]
+    threshold: int
+
+    def __post_init__(self) -> None:
+        if not self.policy_id.strip():
+            raise WitnessQuorumPolicyError("policy_id must not be empty")
+        if not self.witness_ids:
+            raise WitnessQuorumPolicyError("quorum policy must name witnesses")
+        if any(not witness_id.strip() for witness_id in self.witness_ids):
+            raise WitnessQuorumPolicyError("witness ids must not be empty")
+        if len(set(self.witness_ids)) != len(self.witness_ids):
+            raise WitnessQuorumPolicyError("quorum policy contains duplicate witnesses")
+        if isinstance(self.threshold, bool) or not isinstance(self.threshold, int):
+            raise WitnessQuorumPolicyError("threshold must be an integer")
+        if self.threshold < 1 or self.threshold > len(self.witness_ids):
+            raise WitnessQuorumPolicyError(
+                "threshold must be between 1 and the configured witness count"
+            )
+
+    def digest(self) -> str:
+        return content_hash(
+            {
+                "policy_id": self.policy_id,
+                "witness_ids": sorted(self.witness_ids),
+                "threshold": self.threshold,
+            }
+        )
 
 
 @dataclass(frozen=True)
@@ -47,140 +75,173 @@ class WitnessVote:
     receipt: WitnessReceipt
     record: WitnessRecord
 
+    @property
+    def scope(self) -> tuple[str, str, int]:
+        return (
+            self.record.operation_id,
+            self.record.execution_id,
+            self.record.checkpoint_version,
+        )
+
+    @property
+    def commitment(self) -> tuple[str, str, int, str, str, int, str]:
+        return (
+            self.record.operation_id,
+            self.record.execution_id,
+            self.record.checkpoint_version,
+            self.record.checkpoint_digest,
+            self.record.signer_id,
+            self.record.last_journal_sequence,
+            self.record.last_journal_hash,
+        )
+
+    @property
+    def commitment_hash(self) -> str:
+        return content_hash(
+            {
+                "operation_id": self.record.operation_id,
+                "execution_id": self.record.execution_id,
+                "checkpoint_version": self.record.checkpoint_version,
+                "checkpoint_digest": self.record.checkpoint_digest,
+                "signer_id": self.record.signer_id,
+                "last_journal_sequence": self.record.last_journal_sequence,
+                "last_journal_hash": self.record.last_journal_hash,
+            }
+        )
+
 
 @dataclass(frozen=True)
 class WitnessQuorumResult:
+    state: WitnessQuorumState
+    policy_digest: str
     operation_id: str
     execution_id: str
     checkpoint_version: int
     checkpoint_digest: str
-    required: int
-    registered: int
     counted_witnesses: tuple[str, ...]
-    quorum_met: bool
+    required: int
+    conflicting_commitment_hashes: tuple[str, ...] = ()
 
     @property
     def count(self) -> int:
         return len(self.counted_witnesses)
 
+    @property
+    def quorum_met(self) -> bool:
+        return self.state is WitnessQuorumState.QUORUM
+
 
 def evaluate_witness_quorum(
     votes: Iterable[WitnessVote],
+    *,
     verifiers: Mapping[str, WitnessReceiptVerifier],
-    required: int,
+    policy: WitnessQuorumPolicy,
+    expected_policy_digest: str,
 ) -> WitnessQuorumResult:
-    """Verify and count distinct witness receipts for one checkpoint.
-
-    Raises on malformed policy, unknown identities, invalid signatures/bindings,
-    or conflicting checkpoint commitments. A syntactically valid but
-    insufficient set returns quorum_met=False so callers may distinguish
-    degraded availability from cryptographic corruption.
-    """
-    registered = len(verifiers)
-    if isinstance(required, bool) or not isinstance(required, int):
-        raise InvalidQuorumPolicy("required quorum must be an integer")
-    if required < 1:
-        raise InvalidQuorumPolicy("required quorum must be >= 1")
-    if required > registered:
-        raise InvalidQuorumPolicy(
-            f"required quorum {required} exceeds registered witnesses {registered}"
+    """Verify signed votes against one externally pinned threshold policy."""
+    policy_digest = policy.digest()
+    if expected_policy_digest != policy_digest:
+        raise WitnessQuorumPolicyError(
+            "quorum policy digest does not match externally pinned policy"
         )
 
-    by_witness: dict[str, WitnessVote] = {}
-    target: tuple[str, str, int, str] | None = None
-
+    allowed = set(policy.witness_ids)
+    verified: list[WitnessVote] = []
     for vote in votes:
-        receipt = vote.receipt
-        record = vote.record
-        verifier = verifiers.get(receipt.witness_id)
+        witness_id = vote.receipt.witness_id
+        if witness_id not in allowed:
+            raise WitnessQuorumPolicyError(
+                f"witness {witness_id!r} is not allowed by quorum policy"
+            )
+        verifier = verifiers.get(witness_id)
         if verifier is None:
-            raise UnknownWitnessError(
-                f"witness {receipt.witness_id!r} is not registered"
+            raise WitnessQuorumPolicyError(
+                f"no verifier configured for witness {witness_id!r}"
             )
+        verifier.verify(vote.receipt, vote.record)
+        verified.append(vote)
 
-        verifier.verify(receipt, record)
-
-        identity = (
-            receipt.operation_id,
-            receipt.execution_id,
-            receipt.checkpoint_version,
-            receipt.checkpoint_digest,
-        )
-        if target is None:
-            target = identity
-        elif identity != target:
-            raise WitnessReceiptConflictError(
-                "witness receipts do not bind to the same checkpoint commitment"
-            )
-
-        prior = by_witness.get(receipt.witness_id)
-        if prior is None:
-            by_witness[receipt.witness_id] = vote
-            continue
-
-        prior_receipt = prior.receipt
-        prior_identity = (
-            prior_receipt.operation_id,
-            prior_receipt.execution_id,
-            prior_receipt.checkpoint_version,
-            prior_receipt.checkpoint_digest,
-        )
-        if identity != prior_identity:
-            raise WitnessReceiptConflictError(
-                f"witness {receipt.witness_id!r} submitted conflicting checkpoint receipts"
-            )
-
-        # Multiple independently valid receipts from the same witness for the
-        # same checkpoint are availability duplicates, never extra votes.
-
-    if target is None:
+    if not verified:
         return WitnessQuorumResult(
+            state=WitnessQuorumState.INSUFFICIENT,
+            policy_digest=policy_digest,
             operation_id="",
             execution_id="",
             checkpoint_version=0,
             checkpoint_digest="",
-            required=required,
-            registered=registered,
             counted_witnesses=(),
-            quorum_met=False,
+            required=policy.threshold,
         )
 
-    operation_id, execution_id, checkpoint_version, checkpoint_digest = target
+    scope = verified[0].scope
+    for vote in verified[1:]:
+        if vote.scope != scope:
+            raise WitnessQuorumScopeError(
+                "quorum inputs span different operation/execution/checkpoint scopes"
+            )
+
+    by_witness: dict[str, WitnessVote] = {}
+    duplicate_conflict = False
+    conflicting_hashes: set[str] = set()
+
+    for vote in verified:
+        witness_id = vote.receipt.witness_id
+        prior = by_witness.get(witness_id)
+        if prior is None:
+            by_witness[witness_id] = vote
+            continue
+        if prior.commitment != vote.commitment:
+            duplicate_conflict = True
+            conflicting_hashes.add(prior.commitment_hash)
+            conflicting_hashes.add(vote.commitment_hash)
+
+    commitments = {vote.commitment for vote in by_witness.values()}
+    if len(commitments) > 1:
+        conflicting_hashes.update(
+            vote.commitment_hash for vote in by_witness.values()
+        )
+
+    operation_id, execution_id, checkpoint_version = scope
     counted = tuple(sorted(by_witness))
+
+    if duplicate_conflict or len(commitments) > 1:
+        return WitnessQuorumResult(
+            state=WitnessQuorumState.SPLIT_VIEW,
+            policy_digest=policy_digest,
+            operation_id=operation_id,
+            execution_id=execution_id,
+            checkpoint_version=checkpoint_version,
+            checkpoint_digest="",
+            counted_witnesses=counted,
+            required=policy.threshold,
+            conflicting_commitment_hashes=tuple(sorted(conflicting_hashes)),
+        )
+
+    checkpoint_digest = next(iter(by_witness.values())).record.checkpoint_digest
+    state = (
+        WitnessQuorumState.QUORUM
+        if len(by_witness) >= policy.threshold
+        else WitnessQuorumState.INSUFFICIENT
+    )
     return WitnessQuorumResult(
+        state=state,
+        policy_digest=policy_digest,
         operation_id=operation_id,
         execution_id=execution_id,
         checkpoint_version=checkpoint_version,
         checkpoint_digest=checkpoint_digest,
-        required=required,
-        registered=registered,
         counted_witnesses=counted,
-        quorum_met=len(counted) >= required,
+        required=policy.threshold,
     )
 
 
-def require_witness_quorum(
-    votes: Iterable[WitnessVote],
-    verifiers: Mapping[str, WitnessReceiptVerifier],
-    required: int,
-) -> WitnessQuorumResult:
-    """Return a verified quorum result or raise when the threshold is unmet."""
-    result = evaluate_witness_quorum(votes, verifiers, required)
-    if not result.quorum_met:
-        raise WitnessQuorumNotMet(
-            f"witness quorum not met: {result.count}/{result.required}"
-        )
-    return result
-
-
 __all__ = [
-    "InvalidQuorumPolicy",
-    "UnknownWitnessError",
     "WitnessQuorumError",
-    "WitnessQuorumNotMet",
+    "WitnessQuorumPolicy",
+    "WitnessQuorumPolicyError",
     "WitnessQuorumResult",
-    "WitnessReceiptConflictError",
+    "WitnessQuorumScopeError",
+    "WitnessQuorumState",
     "WitnessVote",
     "evaluate_witness_quorum",
-    "require_witness_quorum",
 ]
