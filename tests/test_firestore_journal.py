@@ -21,6 +21,7 @@ from proofos.journal import (
     Journal,
     JournalUnavailableError,
     Severity,
+    finalize,
     new_event_id,
     summarize,
     verify_events,
@@ -262,6 +263,47 @@ class IdempotencyTests(FirestoreAdapterTestCase):
 
         with self.assertRaises(JournalUnavailableError):
             self.sink.append(draft(event_id="evt_fixed"))
+
+
+class StoreReplayIntegrityTests(FirestoreAdapterTestCase):
+    def test_identical_store_replay_is_idempotent(self):
+        event = self.sink.append(draft(event_id="evt_replica"))
+        self.sink.store(event)
+
+        self.assertEqual(self.sink.list_execution(EXEC), (event,))
+
+    def test_store_rejects_different_content_at_existing_sequence(self):
+        original = self.sink.append(draft(event_id="evt_original"))
+        conflicting = finalize(
+            draft(event_id="evt_conflict", status="VERIFIED"),
+            original.sequence,
+            original.previous_hash,
+        )
+
+        with self.assertRaisesRegex(
+            JournalUnavailableError, "sequence 0 already contains different content"
+        ):
+            self.sink.store(conflicting)
+
+    def test_store_rejects_event_id_index_collision(self):
+        original = self.sink.append(draft(event_id="evt_shared"))
+        conflicting = finalize(
+            draft(event_id="evt_shared", status="VERIFIED"),
+            original.sequence + 1,
+            original.content_hash,
+        )
+
+        with self.assertRaisesRegex(
+            JournalUnavailableError, "event id 'evt_shared' maps to a different sequence"
+        ):
+            self.sink.store(conflicting)
+
+    def test_store_rejects_partial_existing_replica_state(self):
+        event = finalize(draft(event_id="evt_partial"), 0, GENESIS_HASH)
+        self.client.docs[f"executions/{EXEC}/events/{_sequence_id(0)}"] = event.to_dict()
+
+        with self.assertRaisesRegex(JournalUnavailableError, "only partly present"):
+            self.sink.store(event)
 
 
 class ConcurrencyTests(FirestoreAdapterTestCase):
