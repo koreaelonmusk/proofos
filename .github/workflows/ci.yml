@@ -217,6 +217,16 @@ jobs:
           uv run python scripts/verify_followup_trusted_promotion.py --self-test
       - name: Validate authenticated E2E identity workflow
         run: uv run python scripts/validate_authenticated_e2e_workflow.py
+      - name: Regression-test gh api artifact selector syntax
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=1234567890
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=1" --jq "
+            [.artifacts[].name
+             | select(. == (\"vercel-provider-admission-$run_id.json\"))]
+            | if length <= 1 then . else error(\"ambiguous provider admission artifact\") end
+          " >/dev/null
       - name: Validate authenticated E2E launch authorization
         run: uv run python scripts/authorize_authenticated_e2e.py --self-test
       - name: Validate authenticated E2E promotion gate
