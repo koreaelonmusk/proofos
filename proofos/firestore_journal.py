@@ -323,12 +323,50 @@ class FirestoreJournalSink:
         return tuple(sorted(events, key=lambda e: e.sequence))
 
     def verify_chain(self, execution_id: str) -> tuple[bool, tuple[str, ...]]:
-        """Check the persisted chain. Never raises; reports problems instead."""
+        """Check event linkage and the persisted chain-head commitment."""
         try:
             events = self.list_execution(execution_id)
-        except JournalUnavailableError as exc:
-            return False, (str(exc),)
-        return verify_events(events)
+            head_snapshot = self._execution_ref(execution_id).get()
+        except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, JournalUnavailableError):
+                return False, (str(exc),)
+            return False, (
+                f"firestore head read failed for {execution_id}: "
+                f"{type(exc).__name__}: {exc}",
+            )
+
+        ok, chain_problems = verify_events(events)
+        problems = list(chain_problems)
+
+        head_exists = getattr(head_snapshot, "exists", False)
+        if not head_exists:
+            if events:
+                problems.append("chain head missing for persisted events")
+            return (not problems), tuple(problems)
+
+        head = head_snapshot.to_dict()
+        if not isinstance(head, dict):
+            problems.append("malformed chain head: expected a mapping")
+            return False, tuple(problems)
+
+        try:
+            next_sequence = int(head["next_sequence"])
+            head_hash = str(head["head_hash"])
+        except (KeyError, TypeError, ValueError) as exc:
+            problems.append(f"malformed chain head: {exc}")
+            return False, tuple(problems)
+
+        expected_next = events[-1].sequence + 1 if events else 0
+        expected_hash = events[-1].content_hash if events else GENESIS_HASH
+        if next_sequence != expected_next:
+            problems.append(
+                f"chain head next_sequence {next_sequence} does not match "
+                f"event tail {expected_next}"
+            )
+        if head_hash != expected_hash:
+            problems.append("chain head hash does not match persisted event tail")
+
+        return (ok and not problems), tuple(problems)
 
 
 def _from_record(record: Any) -> ExecutionEvent:
