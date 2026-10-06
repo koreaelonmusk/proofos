@@ -290,11 +290,31 @@ class _ChainingSink:
         return event
 
     def store(self, event: ExecutionEvent) -> None:
-        """Store an already-chained event verbatim, without re-sequencing it."""
+        """Store an already-chained event verbatim, rejecting replica conflicts."""
+        if not event.intact:
+            raise JournalUnavailableError(
+                f"replica event {event.event_id!r} failed content integrity"
+            )
+
         existing = self._event_ids.setdefault(event.execution_id, {})
-        if event.event_id in existing:
-            return
-        self._events.setdefault(event.execution_id, []).append(event)
+        chain = self._events.setdefault(event.execution_id, [])
+
+        by_id = existing.get(event.event_id)
+        if by_id is not None:
+            if by_id.content_hash == event.content_hash:
+                return
+            raise JournalUnavailableError(
+                f"replica event id {event.event_id!r} already contains different content"
+            )
+
+        for recorded in chain:
+            if recorded.sequence == event.sequence:
+                raise JournalUnavailableError(
+                    f"replica sequence {event.sequence} already belongs to "
+                    f"event id {recorded.event_id!r}"
+                )
+
+        chain.append(event)
         existing[event.event_id] = event
         self._emit(event)
 
