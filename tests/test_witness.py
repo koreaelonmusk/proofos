@@ -174,6 +174,15 @@ class WitnessLedgerTests(unittest.TestCase):
                 self.signed_first, self.first, self.verifier, observed_at=T0
             )
 
+    def test_non_finite_observation_time_is_rejected(self):
+        with self.assertRaises(WitnessIntegrityError):
+            self.witness.observe(
+                self.signed_first,
+                self.first,
+                self.verifier,
+                observed_at=float("nan"),
+            )
+
     def test_forged_checkpoint_signature_is_rejected_without_append(self):
         raw = bytearray(base64.b64decode(self.signed_first.signature))
         raw[-1] ^= 1
