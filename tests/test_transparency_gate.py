@@ -92,6 +92,66 @@ class TransparencyAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(result.state, TransparencyState.HOLD_INSUFFICIENT)
 
+    def test_preconfigured_certificate_verifier_does_not_block_insufficient_hold(self):
+        insufficient = evaluate_witness_quorum(
+            self.votes[:1],
+            verifiers=self.verifiers,
+            policy=self.policy,
+            expected_policy_digest=self.policy.digest(),
+        )
+        bundle = self.gossip_signer.sign(
+            policy=self.policy,
+            result=insufficient,
+            votes=self.votes[:1],
+            issued_at=T0 + 30,
+        )
+        result = evaluate_transparency(
+            bundle,
+            gossip_verifier=self.gossip_verifier,
+            expected_policy_digest=self.policy.digest(),
+            certificate_verifier=self.cert_verifier,
+        )
+        self.assertEqual(result.state, TransparencyState.HOLD_INSUFFICIENT)
+
+    def test_preconfigured_certificate_verifier_does_not_block_split_view_rejection(self):
+        second = self.votes[1]
+        changed_record = replace(
+            second.record,
+            checkpoint_digest="d" * 64,
+            record_hash="",
+        )
+        changed_record = replace(
+            changed_record,
+            record_hash=changed_record.compute_hash(),
+        )
+        changed_receipt = self.witness_signers["witness-b"].sign(
+            changed_record,
+            issued_at=T0 + 40,
+        )
+        split_votes = (
+            self.votes[0],
+            WitnessVote(changed_receipt, changed_record),
+        )
+        split = evaluate_witness_quorum(
+            split_votes,
+            verifiers=self.verifiers,
+            policy=self.policy,
+            expected_policy_digest=self.policy.digest(),
+        )
+        bundle = self.gossip_signer.sign(
+            policy=self.policy,
+            result=split,
+            votes=split_votes,
+            issued_at=T0 + 41,
+        )
+        result = evaluate_transparency(
+            bundle,
+            gossip_verifier=self.gossip_verifier,
+            expected_policy_digest=self.policy.digest(),
+            certificate_verifier=self.cert_verifier,
+        )
+        self.assertEqual(result.state, TransparencyState.REJECTED_SPLIT_VIEW)
+
     def test_split_view_is_explicitly_rejected(self):
         second = self.votes[1]
         changed_record = replace(
