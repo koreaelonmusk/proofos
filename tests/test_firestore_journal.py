@@ -180,18 +180,36 @@ class TamperTests(FirestoreAdapterTestCase):
         self.assertFalse(ok)
         self.assertTrue(any("missing sequences" in p for p in problems))
 
-    def test_truncated_tail_leaves_the_head_pointer_inconsistent(self):
+    def test_truncated_tail_is_rejected_by_chain_verification(self):
         events = self.append_many(4)
         del self.client.docs[self.client.event_paths(EXEC)[-1]]
 
         remaining = self.sink.list_execution(EXEC)
         self.assertEqual(len(remaining), 3)
-        # The chain head still records the removed event, so the deletion is
-        # detectable even though the shortened chain is internally consistent.
         head = self.client.docs[f"executions/{EXEC}"]
         self.assertEqual(head["next_sequence"], 4)
         self.assertEqual(head["head_hash"], events[-1].content_hash)
-        self.assertNotEqual(remaining[-1].content_hash, head["head_hash"])
+
+        ok, problems = self.sink.verify_chain(EXEC)
+        self.assertFalse(ok)
+        self.assertTrue(any("next_sequence" in p for p in problems))
+        self.assertTrue(any("head hash" in p for p in problems))
+
+    def test_forged_chain_head_hash_is_rejected(self):
+        self.append_many(3)
+        self.client.docs[f"executions/{EXEC}"]["head_hash"] = "f" * 64
+
+        ok, problems = self.sink.verify_chain(EXEC)
+        self.assertFalse(ok)
+        self.assertTrue(any("head hash" in p for p in problems))
+
+    def test_forged_chain_head_sequence_is_rejected(self):
+        self.append_many(3)
+        self.client.docs[f"executions/{EXEC}"]["next_sequence"] = 99
+
+        ok, problems = self.sink.verify_chain(EXEC)
+        self.assertFalse(ok)
+        self.assertTrue(any("next_sequence 99" in p for p in problems))
 
     def test_forged_duplicate_sequence_is_detected(self):
         self.append_many(3)
