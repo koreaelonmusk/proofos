@@ -181,10 +181,8 @@ class FirestoreJournalSink:
     def store(self, event: ExecutionEvent) -> None:
         """Write an already-chained event verbatim, rejecting conflicting replay.
 
-        An identical retry is idempotent. A different event that collides on
-        either sequence or event id is integrity loss, not a successful replay.
-        Both documents are created atomically so a failed import cannot leave
-        the replica half-written.
+        Exact retries are idempotent. Sequence collisions, event-id collisions,
+        malformed stored records, and half-written replicas fail closed.
         """
         event_ref = self._events_ref(event.execution_id).document(
             _sequence_id(event.sequence)
@@ -199,21 +197,24 @@ class FirestoreJournalSink:
             event_exists = getattr(stored_event, "exists", False)
             index_exists = getattr(stored_index, "exists", False)
 
+            if event_exists:
+                if not self._stored_event_matches(stored_event, event):
+                    raise JournalUnavailableError(
+                        f"conflicting replay for {event.execution_id}: "
+                        f"sequence {event.sequence} already contains different content"
+                    )
+            if index_exists:
+                if not self._stored_index_matches(stored_index, expected_index):
+                    raise JournalUnavailableError(
+                        f"conflicting replay for {event.execution_id}: "
+                        f"event id {event.event_id!r} maps to a different sequence"
+                    )
+
             if event_exists or index_exists:
                 if not (event_exists and index_exists):
                     raise JournalUnavailableError(
                         f"conflicting replay for {event.execution_id}: "
                         "event and idempotency index are only partly present"
-                    )
-                if stored_event.to_dict() != expected_event:
-                    raise JournalUnavailableError(
-                        f"conflicting replay for {event.execution_id}: "
-                        f"sequence {event.sequence} already contains different content"
-                    )
-                if stored_index.to_dict() != expected_index:
-                    raise JournalUnavailableError(
-                        f"conflicting replay for {event.execution_id}: "
-                        f"event id {event.event_id!r} maps to a different sequence"
                     )
                 return
 
@@ -224,9 +225,9 @@ class FirestoreJournalSink:
             transaction = self._client.transaction()
             self._transactional(operation)(transaction)
         except self._already_exists:
-            # A concurrent identical writer may win after our reads but before
-            # commit. Re-read the winner and accept only an exact replay.
-            self._verify_stored_replay(event, expected_event, expected_index)
+            # A concurrent writer may win after our reads but before commit.
+            # Re-read the winner and accept only the exact canonical replay.
+            self._verify_stored_replay(event, expected_index)
         except JournalUnavailableError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -235,10 +236,35 @@ class FirestoreJournalSink:
                 f"{type(exc).__name__}: {exc}"
             ) from exc
 
+    def _stored_event_matches(self, snapshot: Any, event: ExecutionEvent) -> bool:
+        stored = _from_record(snapshot.to_dict())
+        if not stored.intact:
+            raise JournalUnavailableError(
+                f"stored event at sequence {event.sequence} failed content integrity"
+            )
+        # Firestore normalizes tuples to arrays/lists. The event hash is over
+        # canonical JSON, where both representations are equivalent, so hash
+        # equality is the stable semantic replay check.
+        return stored.content_hash == event.content_hash
+
+    def _stored_index_matches(
+        self, snapshot: Any, expected_index: dict[str, Any]
+    ) -> bool:
+        record = snapshot.to_dict()
+        if not isinstance(record, dict):
+            raise JournalUnavailableError("malformed idempotency index record")
+        try:
+            event_id = str(record["event_id"])
+            sequence = int(record["sequence"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise JournalUnavailableError(
+                f"malformed idempotency index record: {exc}"
+            ) from exc
+        return event_id == expected_index["event_id"] and sequence == expected_index["sequence"]
+
     def _verify_stored_replay(
         self,
         event: ExecutionEvent,
-        expected_event: dict[str, Any],
         expected_index: dict[str, Any],
     ) -> None:
         try:
@@ -258,15 +284,22 @@ class FirestoreJournalSink:
                 f"{type(exc).__name__}: {exc}"
             ) from exc
 
-        if not (
-            getattr(stored_event, "exists", False)
-            and getattr(stored_index, "exists", False)
-            and stored_event.to_dict() == expected_event
-            and stored_index.to_dict() == expected_index
-        ):
+        event_exists = getattr(stored_event, "exists", False)
+        index_exists = getattr(stored_index, "exists", False)
+        if event_exists and not self._stored_event_matches(stored_event, event):
             raise JournalUnavailableError(
                 f"conflicting concurrent replay for {event.execution_id}: "
-                f"sequence {event.sequence} or event id {event.event_id!r} differs"
+                f"sequence {event.sequence} contains different content"
+            )
+        if index_exists and not self._stored_index_matches(stored_index, expected_index):
+            raise JournalUnavailableError(
+                f"conflicting concurrent replay for {event.execution_id}: "
+                f"event id {event.event_id!r} maps to a different sequence"
+            )
+        if not (event_exists and index_exists):
+            raise JournalUnavailableError(
+                f"conflicting concurrent replay for {event.execution_id}: "
+                "event and idempotency index are only partly present"
             )
 
     # -- reading ----------------------------------------------------------
