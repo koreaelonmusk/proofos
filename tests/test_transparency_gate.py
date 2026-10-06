@@ -14,7 +14,6 @@ from proofos.transparency_gate import (
     TransparencyState,
     evaluate_transparency,
 )
-from proofos.witness import WitnessRecord
 from proofos.witness_gossip import WitnessGossipSigner, WitnessGossipVerifier
 from proofos.witness_quorum import (
     WitnessQuorumState,
