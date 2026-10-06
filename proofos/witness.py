@@ -11,6 +11,7 @@ cloud credentials. Durable transport/storage can implement the same protocol.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -128,6 +129,8 @@ class InMemoryWitnessLedger:
         verifier.verify(envelope, checkpoint)
 
         stamp = time.time() if observed_at is None else float(observed_at)
+        if not math.isfinite(stamp):
+            raise WitnessIntegrityError("witness observed_at must be finite")
         if stamp < envelope.issued_at:
             raise WitnessIntegrityError(
                 "witness observation cannot predate signed checkpoint issuance"
