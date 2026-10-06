@@ -179,22 +179,95 @@ class FirestoreJournalSink:
         return self._transactional(operation)(transaction)
 
     def store(self, event: ExecutionEvent) -> None:
-        """Write an already-chained event verbatim, without re-sequencing it."""
+        """Write an already-chained event verbatim, rejecting conflicting replay.
+
+        An identical retry is idempotent. A different event that collides on
+        either sequence or event id is integrity loss, not a successful replay.
+        Both documents are created atomically so a failed import cannot leave
+        the replica half-written.
+        """
+        event_ref = self._events_ref(event.execution_id).document(
+            _sequence_id(event.sequence)
+        )
+        id_ref = self._event_ids_ref(event.execution_id).document(event.event_id)
+        expected_event = event.to_dict()
+        expected_index = {"event_id": event.event_id, "sequence": event.sequence}
+
+        def operation(transaction):
+            stored_event = event_ref.get(transaction=transaction)
+            stored_index = id_ref.get(transaction=transaction)
+            event_exists = getattr(stored_event, "exists", False)
+            index_exists = getattr(stored_index, "exists", False)
+
+            if event_exists or index_exists:
+                if not (event_exists and index_exists):
+                    raise JournalUnavailableError(
+                        f"conflicting replay for {event.execution_id}: "
+                        "event and idempotency index are only partly present"
+                    )
+                if stored_event.to_dict() != expected_event:
+                    raise JournalUnavailableError(
+                        f"conflicting replay for {event.execution_id}: "
+                        f"sequence {event.sequence} already contains different content"
+                    )
+                if stored_index.to_dict() != expected_index:
+                    raise JournalUnavailableError(
+                        f"conflicting replay for {event.execution_id}: "
+                        f"event id {event.event_id!r} maps to a different sequence"
+                    )
+                return
+
+            transaction.create(event_ref, expected_event)
+            transaction.create(id_ref, expected_index)
+
         try:
-            self._events_ref(event.execution_id).document(
-                _sequence_id(event.sequence)
-            ).create(event.to_dict())
-            self._event_ids_ref(event.execution_id).document(event.event_id).create(
-                {"event_id": event.event_id, "sequence": event.sequence}
-            )
+            transaction = self._client.transaction()
+            self._transactional(operation)(transaction)
         except self._already_exists:
-            # Replaying the same finalized event is a no-op, not an error.
-            return
+            # A concurrent identical writer may win after our reads but before
+            # commit. Re-read the winner and accept only an exact replay.
+            self._verify_stored_replay(event, expected_event, expected_index)
+        except JournalUnavailableError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise JournalUnavailableError(
                 f"firestore store failed for {event.execution_id}: "
                 f"{type(exc).__name__}: {exc}"
             ) from exc
+
+    def _verify_stored_replay(
+        self,
+        event: ExecutionEvent,
+        expected_event: dict[str, Any],
+        expected_index: dict[str, Any],
+    ) -> None:
+        try:
+            stored_event = (
+                self._events_ref(event.execution_id)
+                .document(_sequence_id(event.sequence))
+                .get()
+            )
+            stored_index = (
+                self._event_ids_ref(event.execution_id)
+                .document(event.event_id)
+                .get()
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise JournalUnavailableError(
+                f"firestore replay verification failed for {event.execution_id}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+        if not (
+            getattr(stored_event, "exists", False)
+            and getattr(stored_index, "exists", False)
+            and stored_event.to_dict() == expected_event
+            and stored_index.to_dict() == expected_index
+        ):
+            raise JournalUnavailableError(
+                f"conflicting concurrent replay for {event.execution_id}: "
+                f"sequence {event.sequence} or event id {event.event_id!r} differs"
+            )
 
     # -- reading ----------------------------------------------------------
 
