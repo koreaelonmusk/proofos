@@ -1,4 +1,4 @@
-"""N-of-M witness quorum adversarial tests."""
+"""Pinned witness quorum adversarial tests."""
 
 import base64
 import unittest
@@ -10,13 +10,12 @@ from proofos.journal import EventType, InMemoryJournalSink, Journal
 from proofos.verifier import Requirement
 from proofos.witness import InMemoryWitnessLedger
 from proofos.witness_quorum import (
-    InvalidQuorumPolicy,
-    UnknownWitnessError,
-    WitnessQuorumNotMet,
-    WitnessReceiptConflictError,
+    WitnessQuorumPolicy,
+    WitnessQuorumPolicyError,
+    WitnessQuorumScopeError,
+    WitnessQuorumState,
     WitnessVote,
     evaluate_witness_quorum,
-    require_witness_quorum,
 )
 from proofos.witness_receipt import (
     WitnessReceiptSignatureInvalid,
@@ -31,12 +30,12 @@ REQS = (Requirement("tests"),)
 ASSIGNED = {"executor-v1": "v1"}
 
 
-def checkpoint(task_id=TASK):
+def checkpoint(task_id=TASK, operation_id=OP, execution_id="exec_quorum"):
     sink = InMemoryJournalSink()
-    journal = Journal(sink, execution_id="exec_quorum", task_id=task_id)
+    journal = Journal(sink, execution_id=execution_id, task_id=task_id)
     journal.record(EventType.EXECUTION_START, "orchestrator", "STARTED")
     return open_operation(
-        OP,
+        operation_id,
         journal.execution_id,
         task_id,
         REQS,
@@ -46,7 +45,7 @@ def checkpoint(task_id=TASK):
     )
 
 
-def votes_for(names=("witness-a", "witness-b", "witness-c")):
+def fixture(names=("witness-a", "witness-b", "witness-c")):
     cp = checkpoint()
     checkpoint_signer = CheckpointSigner.generate("checkpoint-publisher-v1")
     checkpoint_verifier = CheckpointVerifier.from_b64(
@@ -59,84 +58,89 @@ def votes_for(names=("witness-a", "witness-b", "witness-c")):
     signers = {}
     for offset, name in enumerate(names, start=2):
         record = InMemoryWitnessLedger(name).observe(
-            envelope,
-            cp,
-            checkpoint_verifier,
-            observed_at=T0 + offset,
+            envelope, cp, checkpoint_verifier, observed_at=T0 + offset
         )
         signer = WitnessReceiptSigner.generate(name)
         receipt = signer.sign(record, issued_at=T0 + offset + 1)
-        votes[name] = WitnessVote(receipt=receipt, record=record)
+        votes[name] = WitnessVote(receipt, record)
         verifiers[name] = WitnessReceiptVerifier.from_b64(
-            signer.public_key_b64(),
-            name,
+            signer.public_key_b64(), name
         )
         signers[name] = signer
-    return cp, votes, verifiers, signers
+
+    policy = WitnessQuorumPolicy("witness-policy-v1", tuple(names), 2)
+    return cp, votes, verifiers, signers, policy
 
 
 class WitnessQuorumTests(unittest.TestCase):
     def setUp(self):
-        self.cp, self.votes, self.verifiers, self.signers = votes_for()
-
-    def test_two_of_three_distinct_witnesses_reach_quorum(self):
-        result = evaluate_witness_quorum(
-            [self.votes["witness-a"], self.votes["witness-b"]],
+        (
+            self.cp,
+            self.votes,
             self.verifiers,
-            required=2,
+            self.signers,
+            self.policy,
+        ) = fixture()
+        self.pin = self.policy.digest()
+
+    def evaluate(self, votes, **kwargs):
+        return evaluate_witness_quorum(
+            votes,
+            verifiers=kwargs.get("verifiers", self.verifiers),
+            policy=kwargs.get("policy", self.policy),
+            expected_policy_digest=kwargs.get("pin", self.pin),
         )
-        self.assertTrue(result.quorum_met)
+
+    def test_two_of_three_reaches_quorum(self):
+        result = self.evaluate(
+            [self.votes["witness-a"], self.votes["witness-b"]]
+        )
+        self.assertEqual(result.state, WitnessQuorumState.QUORUM)
         self.assertEqual(result.count, 2)
-        self.assertEqual(
-            result.counted_witnesses,
-            ("witness-a", "witness-b"),
-        )
-        self.assertEqual(result.checkpoint_digest, self.votes["witness-a"].receipt.checkpoint_digest)
+        self.assertTrue(result.quorum_met)
+
+    def test_one_of_three_is_insufficient(self):
+        result = self.evaluate([self.votes["witness-a"]])
+        self.assertEqual(result.state, WitnessQuorumState.INSUFFICIENT)
+        self.assertFalse(result.quorum_met)
+
+    def test_empty_vote_set_is_non_authorizing(self):
+        result = self.evaluate([])
+        self.assertEqual(result.state, WitnessQuorumState.INSUFFICIENT)
+        self.assertEqual(result.count, 0)
 
     def test_duplicate_witness_does_not_count_twice(self):
         vote = self.votes["witness-a"]
-        result = evaluate_witness_quorum(
-            [vote, vote],
-            self.verifiers,
-            required=2,
-        )
-        self.assertFalse(result.quorum_met)
+        result = self.evaluate([vote, vote])
         self.assertEqual(result.count, 1)
+        self.assertEqual(result.state, WitnessQuorumState.INSUFFICIENT)
 
-    def test_multiple_valid_receipts_from_one_witness_still_count_once(self):
+    def test_multiple_valid_receipts_from_one_witness_count_once(self):
         vote = self.votes["witness-a"]
-        later_receipt = self.signers["witness-a"].sign(
-            vote.record,
-            issued_at=vote.receipt.issued_at + 10,
+        later = self.signers["witness-a"].sign(
+            vote.record, issued_at=vote.receipt.issued_at + 10
         )
-        result = evaluate_witness_quorum(
-            [vote, WitnessVote(later_receipt, vote.record)],
-            self.verifiers,
-            required=2,
-        )
-        self.assertFalse(result.quorum_met)
+        result = self.evaluate([vote, WitnessVote(later, vote.record)])
         self.assertEqual(result.counted_witnesses, ("witness-a",))
 
-    def test_require_quorum_raises_when_threshold_is_unmet(self):
-        with self.assertRaises(WitnessQuorumNotMet):
-            require_witness_quorum(
-                [self.votes["witness-a"]],
-                self.verifiers,
-                required=2,
-            )
-
-    def test_unknown_witness_is_rejected_not_ignored(self):
+    def test_unconfigured_witness_is_rejected(self):
         unknown_signer = WitnessReceiptSigner.generate("witness-x")
-        record = replace(self.votes["witness-a"].record, witness_id="witness-x", record_hash="")
+        record = replace(
+            self.votes["witness-a"].record,
+            witness_id="witness-x",
+            record_hash="",
+        )
         record = replace(record, record_hash=record.compute_hash())
         receipt = unknown_signer.sign(record, issued_at=T0 + 10)
 
-        with self.assertRaises(UnknownWitnessError):
-            evaluate_witness_quorum(
-                [WitnessVote(receipt, record)],
-                self.verifiers,
-                required=2,
-            )
+        with self.assertRaises(WitnessQuorumPolicyError):
+            self.evaluate([WitnessVote(receipt, record)])
+
+    def test_missing_verifier_is_rejected(self):
+        verifiers = dict(self.verifiers)
+        del verifiers["witness-a"]
+        with self.assertRaises(WitnessQuorumPolicyError):
+            self.evaluate([self.votes["witness-a"]], verifiers=verifiers)
 
     def test_forged_receipt_is_rejected(self):
         vote = self.votes["witness-a"]
@@ -147,56 +151,69 @@ class WitnessQuorumTests(unittest.TestCase):
             signature=base64.b64encode(bytes(raw)).decode("ascii"),
         )
         with self.assertRaises(WitnessReceiptSignatureInvalid):
-            evaluate_witness_quorum(
-                [WitnessVote(forged, vote.record)],
-                self.verifiers,
-                required=1,
-            )
+            self.evaluate([WitnessVote(forged, vote.record)])
 
-    def test_conflicting_checkpoint_commitments_fail_closed(self):
-        conflicting_cp = checkpoint(task_id="OTHER-TASK")
-        checkpoint_signer = CheckpointSigner.generate("checkpoint-publisher-v1")
-        checkpoint_verifier = CheckpointVerifier.from_b64(
-            checkpoint_signer.public_key_b64()
+    def test_cross_witness_conflict_is_split_view(self):
+        changed = replace(
+            self.votes["witness-b"].record,
+            checkpoint_digest="f" * 64,
+            record_hash="",
         )
-        envelope = checkpoint_signer.sign(conflicting_cp, issued_at=T0 + 1)
-        record = InMemoryWitnessLedger("witness-b").observe(
-            envelope,
-            conflicting_cp,
-            checkpoint_verifier,
-            observed_at=T0 + 3,
+        changed = replace(changed, record_hash=changed.compute_hash())
+        receipt = self.signers["witness-b"].sign(changed, issued_at=T0 + 10)
+        result = self.evaluate(
+            [self.votes["witness-a"], WitnessVote(receipt, changed)]
         )
-        signer = self.signers["witness-b"]
-        conflicting_receipt = signer.sign(record, issued_at=T0 + 4)
+        self.assertEqual(result.state, WitnessQuorumState.SPLIT_VIEW)
+        self.assertGreaterEqual(len(result.conflicting_commitment_hashes), 2)
 
-        with self.assertRaises(WitnessReceiptConflictError):
-            evaluate_witness_quorum(
-                [
-                    self.votes["witness-a"],
-                    WitnessVote(conflicting_receipt, record),
-                ],
-                self.verifiers,
-                required=2,
-            )
+    def test_same_witness_conflicting_commitment_is_split_view(self):
+        vote = self.votes["witness-a"]
+        changed = replace(
+            vote.record,
+            checkpoint_digest="e" * 64,
+            record_hash="",
+        )
+        changed = replace(changed, record_hash=changed.compute_hash())
+        receipt = self.signers["witness-a"].sign(changed, issued_at=T0 + 10)
+        result = self.evaluate([vote, WitnessVote(receipt, changed)])
+        self.assertEqual(result.state, WitnessQuorumState.SPLIT_VIEW)
 
-    def test_required_quorum_cannot_exceed_registered_witnesses(self):
-        with self.assertRaises(InvalidQuorumPolicy):
-            evaluate_witness_quorum([], self.verifiers, required=4)
+    def test_different_scope_is_rejected_not_counted(self):
+        vote = self.votes["witness-b"]
+        changed = replace(
+            vote.record,
+            operation_id="other-operation",
+            record_hash="",
+        )
+        changed = replace(changed, record_hash=changed.compute_hash())
+        receipt = self.signers["witness-b"].sign(changed, issued_at=T0 + 10)
+        with self.assertRaises(WitnessQuorumScopeError):
+            self.evaluate([self.votes["witness-a"], WitnessVote(receipt, changed)])
 
-    def test_required_quorum_must_be_positive(self):
-        with self.assertRaises(InvalidQuorumPolicy):
-            evaluate_witness_quorum([], self.verifiers, required=0)
+    def test_policy_digest_must_match_external_pin(self):
+        with self.assertRaises(WitnessQuorumPolicyError):
+            self.evaluate([self.votes["witness-a"]], pin="0" * 64)
 
-    def test_boolean_is_not_a_valid_quorum_threshold(self):
-        with self.assertRaises(InvalidQuorumPolicy):
-            evaluate_witness_quorum([], self.verifiers, required=True)
+    def test_policy_threshold_cannot_be_invalid(self):
+        with self.assertRaises(WitnessQuorumPolicyError):
+            WitnessQuorumPolicy("bad", ("witness-a",), 2)
+        with self.assertRaises(WitnessQuorumPolicyError):
+            WitnessQuorumPolicy("bad", ("witness-a",), True)
 
-    def test_empty_vote_set_is_non_authorizing(self):
-        result = evaluate_witness_quorum([], self.verifiers, required=2)
-        self.assertFalse(result.quorum_met)
-        self.assertEqual(result.count, 0)
+    def test_quorum_result_carries_no_verdict_or_capability_authority(self):
+        result = self.evaluate(
+            [self.votes["witness-a"], self.votes["witness-b"]]
+        )
         fields = set(result.__dataclass_fields__)
-        for forbidden in ("verdict", "decision", "verified", "evidence"):
+        for forbidden in (
+            "verdict",
+            "decision",
+            "verified",
+            "evidence",
+            "capabilities",
+            "tools",
+        ):
             self.assertNotIn(forbidden, fields)
 
 
