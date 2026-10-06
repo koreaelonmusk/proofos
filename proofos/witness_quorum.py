@@ -146,6 +146,26 @@ def evaluate_witness_quorum(
         )
 
     allowed = set(policy.witness_ids)
+    seen_public_keys: dict[str, str] = {}
+    for witness_id in policy.witness_ids:
+        verifier = verifiers.get(witness_id)
+        if verifier is None:
+            raise WitnessQuorumPolicyError(
+                f"no verifier configured for witness {witness_id!r}"
+            )
+        if verifier.witness_id != witness_id:
+            raise WitnessQuorumPolicyError(
+                f"verifier identity {verifier.witness_id!r} does not match "
+                f"policy witness {witness_id!r}"
+            )
+        public_key = verifier.public_key_b64()
+        prior = seen_public_keys.get(public_key)
+        if prior is not None:
+            raise WitnessQuorumPolicyError(
+                f"witnesses {prior!r} and {witness_id!r} share one Ed25519 public key"
+            )
+        seen_public_keys[public_key] = witness_id
+
     verified: list[WitnessVote] = []
     for vote in votes:
         witness_id = vote.receipt.witness_id
@@ -153,11 +173,7 @@ def evaluate_witness_quorum(
             raise WitnessQuorumPolicyError(
                 f"witness {witness_id!r} is not allowed by quorum policy"
             )
-        verifier = verifiers.get(witness_id)
-        if verifier is None:
-            raise WitnessQuorumPolicyError(
-                f"no verifier configured for witness {witness_id!r}"
-            )
+        verifier = verifiers[witness_id]
         verifier.verify(vote.receipt, vote.record)
         verified.append(vote)
 
