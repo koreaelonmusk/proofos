@@ -96,11 +96,11 @@ jobs:
             }
             run_id="${BASH_REMATCH[1]}"
 
-            admission_artifact="$(gh api "$api/artifacts" --jq --arg source "$run_id" '
+            admission_artifact="$(gh api "$api/artifacts" --jq "
               [.artifacts[].name
-               | select(. == ("vercel-provider-admission-" + $source + ".json"))]
+               | select(. == (\"vercel-provider-admission-$run_id.json\"))]
               | if length == 1 then .[0] else empty end
-            ')"
+            ")"
             test "$admission_artifact" = "vercel-provider-admission-$run_id.json" || {
               echo "exactly one matching Provider Admission Contract is required"
               exit 1
