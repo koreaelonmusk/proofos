@@ -142,6 +142,15 @@ class WitnessQuorumTests(unittest.TestCase):
         with self.assertRaises(WitnessQuorumPolicyError):
             self.evaluate([self.votes["witness-a"]], verifiers=verifiers)
 
+    def test_two_witness_labels_cannot_share_one_public_key(self):
+        verifiers = dict(self.verifiers)
+        verifiers["witness-b"] = WitnessReceiptVerifier.from_b64(
+            self.signers["witness-a"].public_key_b64(),
+            "witness-b",
+        )
+        with self.assertRaisesRegex(WitnessQuorumPolicyError, "share one Ed25519 public key"):
+            self.evaluate([], verifiers=verifiers)
+
     def test_forged_receipt_is_rejected(self):
         vote = self.votes["witness-a"]
         raw = bytearray(base64.b64decode(vote.receipt.signature))
