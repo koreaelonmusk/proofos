@@ -68,7 +68,11 @@ def fixture(names=("witness-a", "witness-b", "witness-c")):
         )
         signers[name] = signer
 
-    policy = WitnessQuorumPolicy("witness-policy-v1", tuple(names), 2)
+    policy = WitnessQuorumPolicy(
+        "witness-policy-v1",
+        tuple((name, verifiers[name].public_key_b64()) for name in names),
+        2,
+    )
     return cp, votes, verifiers, signers, policy
 
 
@@ -151,6 +155,31 @@ class WitnessQuorumTests(unittest.TestCase):
         with self.assertRaisesRegex(WitnessQuorumPolicyError, "share one Ed25519 public key"):
             self.evaluate([], verifiers=verifiers)
 
+    def test_policy_rejects_two_labels_bound_to_one_public_key(self):
+        shared = self.signers["witness-a"].public_key_b64()
+        with self.assertRaisesRegex(
+            WitnessQuorumPolicyError,
+            "distinct Ed25519 public keys",
+        ):
+            WitnessQuorumPolicy(
+                "shared-key-policy",
+                (("witness-a", shared), ("witness-b", shared)),
+                2,
+            )
+
+    def test_verifier_key_substitution_is_rejected_even_with_same_witness_id(self):
+        verifiers = dict(self.verifiers)
+        replacement = WitnessReceiptSigner.generate("witness-a")
+        verifiers["witness-a"] = WitnessReceiptVerifier.from_b64(
+            replacement.public_key_b64(),
+            "witness-a",
+        )
+        with self.assertRaisesRegex(
+            WitnessQuorumPolicyError,
+            "does not match the pinned quorum policy",
+        ):
+            self.evaluate([], verifiers=verifiers)
+
     def test_forged_receipt_is_rejected(self):
         vote = self.votes["witness-a"]
         raw = bytearray(base64.b64decode(vote.receipt.signature))
@@ -206,9 +235,17 @@ class WitnessQuorumTests(unittest.TestCase):
 
     def test_policy_threshold_cannot_be_invalid(self):
         with self.assertRaises(WitnessQuorumPolicyError):
-            WitnessQuorumPolicy("bad", ("witness-a",), 2)
+            WitnessQuorumPolicy(
+                "bad",
+                (("witness-a", self.signers["witness-a"].public_key_b64()),),
+                2,
+            )
         with self.assertRaises(WitnessQuorumPolicyError):
-            WitnessQuorumPolicy("bad", ("witness-a",), True)
+            WitnessQuorumPolicy(
+                "bad",
+                (("witness-a", self.signers["witness-a"].public_key_b64()),),
+                True,
+            )
 
     def test_quorum_result_carries_no_verdict_or_capability_authority(self):
         result = self.evaluate(
