@@ -217,6 +217,10 @@ class WitnessReceiptVerifier:
             ) from exc
         return cls(key, witness_id)
 
+    def public_key_b64(self) -> str:
+        """Stable public identity used to detect duplicate witness keys."""
+        return encode_public_key(self._key)
+
     def verify(self, receipt: WitnessReceipt, record: WitnessRecord) -> None:
         if receipt.version != WITNESS_RECEIPT_VERSION:
             raise WitnessReceiptBindingError(
