@@ -1,19 +1,23 @@
 """Pinned N-of-M quorum over independently signed witness receipts.
 
 Quorum is transparency evidence, never a ProofOS completion verdict. It answers
-only whether enough distinct configured witnesses accepted the same checkpoint
-commitment.
+only whether enough distinct cryptographic witness identities accepted the same
+checkpoint commitment.
 
-The quorum policy is content-addressed and callers must supply the externally
-pinned expected digest. A runtime actor therefore cannot silently downgrade
-2-of-3 into 1-of-1 and still produce an accepted quorum result.
+The policy pins witness id -> Ed25519 public key bindings as well as threshold.
+A runtime actor therefore cannot silently lower 2-of-3, relabel one key as two
+witnesses, or substitute a new witness key without changing the externally
+pinned policy digest.
 """
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Iterable, Mapping
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .integrity import content_hash
 from .witness import WitnessRecord
@@ -41,30 +45,67 @@ class WitnessQuorumState(StrEnum):
 @dataclass(frozen=True)
 class WitnessQuorumPolicy:
     policy_id: str
-    witness_ids: tuple[str, ...]
+    witnesses: tuple[tuple[str, str], ...]
     threshold: int
 
     def __post_init__(self) -> None:
         if not self.policy_id.strip():
             raise WitnessQuorumPolicyError("policy_id must not be empty")
-        if not self.witness_ids:
+        if not self.witnesses:
             raise WitnessQuorumPolicyError("quorum policy must name witnesses")
-        if any(not witness_id.strip() for witness_id in self.witness_ids):
-            raise WitnessQuorumPolicyError("witness ids must not be empty")
-        if len(set(self.witness_ids)) != len(self.witness_ids):
+
+        witness_ids: list[str] = []
+        public_keys: list[str] = []
+        for entry in self.witnesses:
+            if not isinstance(entry, tuple) or len(entry) != 2:
+                raise WitnessQuorumPolicyError(
+                    "each witness policy entry must be (witness_id, public_key_b64)"
+                )
+            witness_id, public_key_b64 = entry
+            if not isinstance(witness_id, str) or not witness_id.strip():
+                raise WitnessQuorumPolicyError("witness ids must not be empty")
+            if not isinstance(public_key_b64, str) or not public_key_b64.strip():
+                raise WitnessQuorumPolicyError("witness public keys must not be empty")
+            try:
+                raw = base64.b64decode(public_key_b64, validate=True)
+                Ed25519PublicKey.from_public_bytes(raw)
+            except (ValueError, TypeError) as exc:
+                raise WitnessQuorumPolicyError(
+                    f"witness {witness_id!r} public key is not valid Ed25519 base64"
+                ) from exc
+            witness_ids.append(witness_id)
+            public_keys.append(public_key_b64)
+
+        if len(set(witness_ids)) != len(witness_ids):
             raise WitnessQuorumPolicyError("quorum policy contains duplicate witnesses")
+        if len(set(public_keys)) != len(public_keys):
+            raise WitnessQuorumPolicyError(
+                "quorum witnesses must use distinct Ed25519 public keys"
+            )
         if isinstance(self.threshold, bool) or not isinstance(self.threshold, int):
             raise WitnessQuorumPolicyError("threshold must be an integer")
-        if self.threshold < 1 or self.threshold > len(self.witness_ids):
+        if self.threshold < 1 or self.threshold > len(self.witnesses):
             raise WitnessQuorumPolicyError(
                 "threshold must be between 1 and the configured witness count"
             )
+
+    @property
+    def witness_ids(self) -> tuple[str, ...]:
+        return tuple(witness_id for witness_id, _ in self.witnesses)
+
+    def public_key_for(self, witness_id: str) -> str:
+        for configured_id, public_key_b64 in self.witnesses:
+            if configured_id == witness_id:
+                return public_key_b64
+        raise WitnessQuorumPolicyError(
+            f"witness {witness_id!r} is not allowed by quorum policy"
+        )
 
     def digest(self) -> str:
         return content_hash(
             {
                 "policy_id": self.policy_id,
-                "witness_ids": sorted(self.witness_ids),
+                "witnesses": sorted(self.witnesses),
                 "threshold": self.threshold,
             }
         )
@@ -138,7 +179,7 @@ def evaluate_witness_quorum(
     policy: WitnessQuorumPolicy,
     expected_policy_digest: str,
 ) -> WitnessQuorumResult:
-    """Verify signed votes against one externally pinned threshold policy."""
+    """Verify signed votes against one externally pinned cryptographic policy."""
     policy_digest = policy.digest()
     if expected_policy_digest != policy_digest:
         raise WitnessQuorumPolicyError(
@@ -146,7 +187,6 @@ def evaluate_witness_quorum(
         )
 
     allowed = set(policy.witness_ids)
-    seen_public_keys: dict[str, str] = {}
     for witness_id in policy.witness_ids:
         verifier = verifiers.get(witness_id)
         if verifier is None:
@@ -158,13 +198,11 @@ def evaluate_witness_quorum(
                 f"verifier identity {verifier.witness_id!r} does not match "
                 f"policy witness {witness_id!r}"
             )
-        public_key = verifier.public_key_b64()
-        prior = seen_public_keys.get(public_key)
-        if prior is not None:
+        if verifier.public_key_b64() != policy.public_key_for(witness_id):
             raise WitnessQuorumPolicyError(
-                f"witnesses {prior!r} and {witness_id!r} share one Ed25519 public key"
+                f"verifier public key for witness {witness_id!r} does not match "
+                "the pinned quorum policy"
             )
-        seen_public_keys[public_key] = witness_id
 
     verified: list[WitnessVote] = []
     for vote in votes:
