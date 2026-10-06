@@ -74,7 +74,7 @@ def evaluate_transparency(
     )
 
     if quorum.state is WitnessQuorumState.SPLIT_VIEW:
-        if certificate is not None or certificate_verifier is not None:
+        if certificate is not None:
             raise TransparencyGateError(
                 "split-view transparency evidence cannot carry a quorum certificate"
             )
@@ -85,7 +85,7 @@ def evaluate_transparency(
         )
 
     if quorum.state is WitnessQuorumState.INSUFFICIENT:
-        if certificate is not None or certificate_verifier is not None:
+        if certificate is not None:
             raise TransparencyGateError(
                 "insufficient witness evidence cannot carry a quorum certificate"
             )
