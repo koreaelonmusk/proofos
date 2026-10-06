@@ -306,6 +306,23 @@ class StoreReplayIntegrityTests(FirestoreAdapterTestCase):
             self.sink.store(event)
 
 
+    def test_store_accepts_firestore_normalized_tuple_payload_replay(self):
+        event = finalize(
+            draft(event_id="evt_tuple", coordinates=(1, 2)),
+            0,
+            GENESIS_HASH,
+        )
+        stored = event.to_dict()
+        stored["payload"] = {"coordinates": [1, 2]}
+        self.client.docs[f"executions/{EXEC}/events/{_sequence_id(0)}"] = stored
+        self.client.docs[f"executions/{EXEC}/event_ids/evt_tuple"] = {
+            "event_id": "evt_tuple",
+            "sequence": 0,
+        }
+
+        self.sink.store(event)
+
+
 class ConcurrencyTests(FirestoreAdapterTestCase):
     def test_a_lost_sequence_race_retries_instead_of_overwriting(self):
         self.sink.append(draft(event_id="evt_a"))
