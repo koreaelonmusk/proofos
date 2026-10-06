@@ -378,6 +378,38 @@ class IdempotencyTests(unittest.TestCase):
         self.assertEqual(len(sink.list_execution("exec_test")), 2)
 
 
+class ReplicaStoreIntegrityTests(unittest.TestCase):
+    def test_identical_replica_replay_is_idempotent(self):
+        sink = InMemoryJournalSink()
+        event = sink.append(draft(event_id="evt_replica"))
+
+        sink.store(event)
+
+        self.assertEqual(sink.list_execution("exec_test"), (event,))
+
+    def test_replica_rejects_same_event_id_with_different_content(self):
+        sink = InMemoryJournalSink()
+        event = sink.append(draft(event_id="evt_shared"))
+        conflicting = replace(event, status="VERIFIED", content_hash="")
+        conflicting = replace(conflicting, content_hash=conflicting.compute_hash())
+
+        with self.assertRaisesRegex(
+            JournalUnavailableError, "event id 'evt_shared' already contains different content"
+        ):
+            sink.store(conflicting)
+
+    def test_replica_rejects_duplicate_sequence_with_different_event_id(self):
+        sink = InMemoryJournalSink()
+        event = sink.append(draft(event_id="evt_original"))
+        conflicting = replace(event, event_id="evt_conflict", status="VERIFIED", content_hash="")
+        conflicting = replace(conflicting, content_hash=conflicting.compute_hash())
+
+        with self.assertRaisesRegex(
+            JournalUnavailableError, "replica sequence 0 already belongs"
+        ):
+            sink.store(conflicting)
+
+
 class SinkTests(unittest.TestCase):
     def test_stream_sink_emits_one_json_object_per_line(self):
         stream = io.StringIO()
