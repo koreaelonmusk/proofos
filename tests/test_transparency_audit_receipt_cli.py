@@ -11,6 +11,10 @@ from unittest import mock
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from proofos.auditor_key_rotation import (
+    KEY_TRANSITION_GENESIS,
+    AuditorKeyTransitionSigner,
+)
 from proofos.keys import encode_public_key
 from proofos.quorum_certificate import QuorumCertificateSigner
 from proofos.witness_gossip import WitnessGossipSigner
@@ -49,6 +53,7 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
 
         self.auditor_key = Ed25519PrivateKey.generate()
         self.auditor_public_key = encode_public_key(self.auditor_key.public_key())
+        self.auditor_initial_public_key = self.auditor_public_key
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -59,6 +64,7 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         self.cert_path = root / "certificate.json"
         self.key_path = root / "auditor.pem"
         self.receipt_path = root / "receipt.json"
+        self.transitions_path = root / "auditor-transitions.json"
 
         self.gossip_path.write_text(
             json.dumps(self.bundle.to_dict()),
@@ -68,6 +74,7 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             json.dumps(self.certificate.to_dict()),
             encoding="utf-8",
         )
+        self.transitions_path.write_text("[]", encoding="utf-8")
         self.key_path.write_bytes(
             self.auditor_key.private_bytes(
                 encoding=serialization.Encoding.PEM,
@@ -119,8 +126,14 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             self.cert_signer.public_key_b64(),
             "--certificate-signer-id",
             "quorum-aggregator-v1",
-            "--auditor-public-key",
-            self.auditor_public_key,
+            "--auditor-initial-public-key",
+            self.auditor_initial_public_key,
+            "--auditor-key-transitions",
+            str(self.transitions_path),
+            "--expected-auditor-generation",
+            "0",
+            "--expected-auditor-transition-digest",
+            KEY_TRANSITION_GENESIS,
             "--auditor-id",
             "external-auditor-v1",
         ]
@@ -153,6 +166,75 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         self.assertTrue(report["valid"])
         self.assertEqual(report["transparency_state"], "ACCEPTED")
 
+    def test_public_verifier_accepts_proven_auditor_key_rotation(self):
+        successor = Ed25519PrivateKey.generate()
+        transition = AuditorKeyTransitionSigner.sign(
+            auditor_id="external-auditor-v1",
+            generation=1,
+            previous_private_key=self.auditor_key,
+            next_private_key=successor,
+            previous_transition_digest=KEY_TRANSITION_GENESIS,
+            issued_at=T0 + 80,
+        )
+        self.transitions_path.write_text(
+            json.dumps([transition.to_dict()]),
+            encoding="utf-8",
+        )
+        self.key_path.write_bytes(
+            successor.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+        self.auditor_public_key = encode_public_key(successor.public_key())
+        self.create_receipt()
+
+        cmd = self.verify_cmd()
+        gen_index = cmd.index("--expected-auditor-generation") + 1
+        digest_index = cmd.index("--expected-auditor-transition-digest") + 1
+        cmd[gen_index] = "1"
+        cmd[digest_index] = transition.transition_digest()
+        result = subprocess.run(
+            cmd,
+            cwd=self.outside,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["auditor_key_generation"], 1)
+
+    def test_public_verifier_rejects_stale_rotation_prefix(self):
+        successor = Ed25519PrivateKey.generate()
+        transition = AuditorKeyTransitionSigner.sign(
+            auditor_id="external-auditor-v1",
+            generation=1,
+            previous_private_key=self.auditor_key,
+            next_private_key=successor,
+            previous_transition_digest=KEY_TRANSITION_GENESIS,
+            issued_at=T0 + 80,
+        )
+        self.transitions_path.write_text("[]", encoding="utf-8")
+        self.create_receipt()
+
+        cmd = self.verify_cmd()
+        gen_index = cmd.index("--expected-auditor-generation") + 1
+        digest_index = cmd.index("--expected-auditor-transition-digest") + 1
+        cmd[gen_index] = "1"
+        cmd[digest_index] = transition.transition_digest()
+        result = subprocess.run(
+            cmd,
+            cwd=self.outside,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 2)
+        report = json.loads(result.stdout)
+        self.assertFalse(report["valid"])
+        self.assertIn("rollback", report["detail"])
     def test_signer_refuses_to_overwrite_existing_receipt(self):
         self.create_receipt()
         second = subprocess.run(
@@ -231,7 +313,10 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertNotIn("private-key", result.stdout)
-        self.assertIn("--auditor-public-key", result.stdout)
+        self.assertNotIn("--auditor-public-key", result.stdout)
+        self.assertIn("--auditor-initial-public-key", result.stdout)
+        self.assertIn("--auditor-key-transitions", result.stdout)
+        self.assertIn("--expected-auditor-generation", result.stdout)
 
 
 if __name__ == "__main__":
