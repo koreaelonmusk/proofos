@@ -19,6 +19,11 @@ from proofos.auditor_key_recovery import (  # noqa: E402
     parse_auditor_key_history,
     verify_auditor_key_history,
 )
+from proofos.recovery_policy_rotation import (  # noqa: E402
+    RECOVERY_POLICY_TRANSITION_GENESIS,
+    parse_recovery_policy_history,
+    verify_recovery_policy_chain,
+)
 from proofos.transparency_audit_receipt import (  # noqa: E402
     TransparencyAuditReceipt,
     TransparencyAuditReceiptVerifier,
@@ -52,8 +57,21 @@ def main() -> int:
         dest="expected_auditor_history_digest",
         required=True,
     )
-    parser.add_argument("--auditor-recovery-policy", type=Path)
-    parser.add_argument("--expected-auditor-recovery-policy-digest")
+    parser.add_argument(
+        "--auditor-recovery-initial-policy",
+        "--auditor-recovery-policy",
+        dest="auditor_recovery_initial_policy",
+        type=Path,
+    )
+    parser.add_argument("--auditor-recovery-policy-history", type=Path)
+    parser.add_argument(
+        "--expected-auditor-recovery-policy-generation", type=int
+    )
+    parser.add_argument(
+        "--expected-auditor-recovery-policy-history-digest",
+        "--expected-auditor-recovery-policy-digest",
+        dest="expected_auditor_recovery_policy_history_digest",
+    )
     parser.add_argument("--auditor-id", required=True)
     args = parser.parse_args()
 
@@ -72,20 +90,43 @@ def main() -> int:
             _read_json(args.auditor_key_history)
         )
         recovery_policy = None
-        if args.auditor_recovery_policy is not None:
-            recovery_policy = RecoveryPolicy.from_dict(
-                _read_json(args.auditor_recovery_policy)
+        recovery_policy_generation = None
+        recovery_policy_history_digest = None
+        recovery_policy_args = (
+            args.auditor_recovery_initial_policy,
+            args.auditor_recovery_policy_history,
+            args.expected_auditor_recovery_policy_generation,
+            args.expected_auditor_recovery_policy_history_digest,
+        )
+        if any(value is not None for value in recovery_policy_args):
+            if args.auditor_recovery_initial_policy is None:
+                raise ValueError("initial recovery policy is required")
+            if args.auditor_recovery_policy_history is None:
+                raise ValueError("recovery policy history is required")
+            if args.expected_auditor_recovery_policy_generation is None:
+                raise ValueError("expected recovery policy generation is required")
+            if args.expected_auditor_recovery_policy_history_digest is None:
+                raise ValueError("expected recovery policy history digest is required")
+
+            initial_recovery_policy = RecoveryPolicy.from_dict(
+                _read_json(args.auditor_recovery_initial_policy)
             )
-        if (
-            args.auditor_recovery_policy is None
-            and args.expected_auditor_recovery_policy_digest is not None
-        ) or (
-            args.auditor_recovery_policy is not None
-            and args.expected_auditor_recovery_policy_digest is None
-        ):
-            raise ValueError(
-                "recovery policy and expected recovery-policy digest must "
-                "be supplied together"
+            recovery_policy_history = parse_recovery_policy_history(
+                _read_json(args.auditor_recovery_policy_history)
+            )
+            recovery_policy = verify_recovery_policy_chain(
+                initial_policy=initial_recovery_policy,
+                transitions=recovery_policy_history,
+                expected_generation=args.expected_auditor_recovery_policy_generation,
+                expected_head_digest=(
+                    args.expected_auditor_recovery_policy_history_digest
+                ),
+            )
+            recovery_policy_generation = (
+                args.expected_auditor_recovery_policy_generation
+            )
+            recovery_policy_history_digest = (
+                args.expected_auditor_recovery_policy_history_digest
             )
         trusted_auditor_key = verify_auditor_key_history(
             auditor_id=args.auditor_id,
@@ -95,7 +136,7 @@ def main() -> int:
             expected_head_digest=args.expected_auditor_history_digest,
             recovery_policy=recovery_policy,
             expected_recovery_policy_digest=(
-                args.expected_auditor_recovery_policy_digest
+                recovery_policy.digest() if recovery_policy is not None else None
             ),
         )
         verifier = TransparencyAuditReceiptVerifier.from_b64(
@@ -120,7 +161,11 @@ def main() -> int:
                 "auditor_key_generation": args.expected_auditor_generation,
                 "auditor_history_digest": args.expected_auditor_history_digest,
                 "auditor_recovery_policy_digest": (
-                    args.expected_auditor_recovery_policy_digest
+                    recovery_policy.digest() if recovery_policy is not None else None
+                ),
+                "auditor_recovery_policy_generation": recovery_policy_generation,
+                "auditor_recovery_policy_history_digest": (
+                    recovery_policy_history_digest
                 ),
                 "transparency_state": receipt.transparency_state,
                 "audit_result_digest": receipt.audit_result_digest,
@@ -129,6 +174,8 @@ def main() -> int:
                     "verifies receipt signature and source-artifact binding",
                     "recomputes transparency from pinned public inputs",
                     "derives the active auditor key from a pinned initial key and verified key history",
+                    "derives recovery authority from a pinned initial policy and verified policy history",
+                    "requires old-policy and new-policy threshold approval for recovery-policy rotation",
                     "requires pinned N-of-M recovery authority for emergency recovery entries",
                     "requires no private key or network access",
                     "does not decide task completion or grant execution authority",
