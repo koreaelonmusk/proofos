@@ -246,6 +246,19 @@ def main() -> int:
                 raise ValueError(
                     "governance snapshot requires recovery policy configuration"
                 )
+            if governance.recovery_policy_digest != "0" * 64:
+                raise ValueError(
+                    "governance snapshot commits a generation-zero recovery "
+                    "policy, so the recovery policy artifact is required"
+                )
+            if (
+                governance.recovery_policy_history_digest
+                != RECOVERY_POLICY_TRANSITION_GENESIS
+            ):
+                raise ValueError(
+                    "governance snapshot has non-genesis recovery policy history "
+                    "without recovery policy configuration"
+                )
         if revocation_generation is not None:
             if governance.revocation_generation != revocation_generation:
                 raise ValueError(
