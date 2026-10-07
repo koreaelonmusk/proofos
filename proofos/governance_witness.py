@@ -466,6 +466,17 @@ def verify_governance_history(
     previous_digest = GOVERNANCE_GENESIS
     final_result: GovernanceQuorumResult | None = None
     for generation, bundle in enumerate(bundles, start=1):
+        if not isinstance(bundle, GovernanceWitnessBundle):
+            raise GovernanceBindingError(
+                f"governance generation {generation} is not a GovernanceWitnessBundle"
+            )
+        try:
+            bundle = GovernanceWitnessBundle.from_dict(bundle.to_dict())
+        except (GovernanceError, ValueError, TypeError, AttributeError) as exc:
+            raise GovernanceBindingError(
+                f"governance generation {generation} fails structural validation"
+            ) from exc
+
         snapshot = bundle.snapshot
         if snapshot.governance_generation != generation:
             raise GovernanceBindingError(
