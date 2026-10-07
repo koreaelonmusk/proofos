@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -16,7 +17,13 @@ from proofos.witness_gossip import WitnessGossipSigner
 from tests.test_witness_gossip import T0, fixture
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SIGN = ROOT / "scripts" / "sign_transparency_audit_receipt.py"
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from sign_transparency_audit_receipt import _write_create_only  # noqa: E402
+
+SIGN = SCRIPTS / "sign_transparency_audit_receipt.py"
 VERIFY = ROOT / "scripts" / "verify_transparency_audit_receipt.py"
 
 
@@ -190,6 +197,29 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         report = json.loads(result.stdout)
         self.assertFalse(report["valid"])
         self.assertIn("private key", report["detail"])
+
+    def test_failed_fsync_never_publishes_partial_destination(self):
+        target = pathlib.Path(self.tmp.name) / "atomic-receipt.json"
+        payload = {"kind": "test-receipt", "value": 1}
+
+        with mock.patch(
+            "sign_transparency_audit_receipt.os.fsync",
+            side_effect=OSError("disk full"),
+        ):
+            with self.assertRaises(OSError):
+                _write_create_only(target, payload)
+
+        self.assertFalse(target.exists())
+        self.assertEqual(
+            list(target.parent.glob(f".{target.name}.*.tmp")),
+            [],
+        )
+
+        _write_create_only(target, payload)
+        self.assertEqual(
+            json.loads(target.read_text(encoding="utf-8")),
+            payload,
+        )
 
     def test_public_verifier_exposes_no_private_key_argument(self):
         result = subprocess.run(
