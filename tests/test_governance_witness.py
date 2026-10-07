@@ -1,5 +1,6 @@
 """Cross-witness governance snapshot adversarial tests."""
 
+import base64
 import unittest
 from dataclasses import replace
 
@@ -124,6 +125,63 @@ class GovernanceWitnessTests(unittest.TestCase):
         )
         result = self.verify(bundle)
         self.assertEqual(result.state, GovernanceQuorumState.SPLIT_VIEW)
+
+    def test_exported_verifier_rejects_unsupported_materialized_versions(self):
+        cases = (
+            replace(self.bundle(), version="proofos.governance-snapshot.v2"),
+            replace(
+                self.bundle(),
+                snapshot=replace(
+                    self.snapshot,
+                    version="proofos.governance-snapshot.v2",
+                ),
+            ),
+            replace(
+                self.bundle(),
+                attestations=(
+                    replace(
+                        self.bundle().attestations[0],
+                        version="proofos.governance-attestation.v2",
+                    ),
+                    self.bundle().attestations[1],
+                ),
+            ),
+        )
+        for candidate in cases:
+            with self.subTest(version=candidate.version):
+                with self.assertRaises(GovernanceBindingError):
+                    verify_governance_bundle(
+                        candidate,
+                        expected_policy_digest=self.policy.digest(),
+                        expected_governance_generation=1,
+                        expected_governance_head_digest=(
+                            candidate.snapshot.snapshot_digest()
+                        ),
+                    )
+
+    def test_validly_signed_attestation_cannot_predate_snapshot(self):
+        attestation = self.signers["a"].sign(
+            self.snapshot,
+            observed_at=T0 + 2,
+        )
+        impossible = replace(attestation, observed_at=T0)
+        impossible = replace(
+            impossible,
+            signature=base64.b64encode(
+                self.signers["a"]._key.sign(impossible.signing_bytes())
+            ).decode("ascii"),
+        )
+        bundle = GovernanceWitnessBundle(
+            version=GOVERNANCE_SNAPSHOT_VERSION,
+            snapshot=self.snapshot,
+            policy=self.policy,
+            attestations=(
+                impossible,
+                self.signers["b"].sign(self.snapshot, observed_at=T0 + 2),
+            ),
+        )
+        with self.assertRaisesRegex(GovernanceBindingError, "predates"):
+            self.verify(bundle)
 
     def test_unknown_authority_field_is_rejected(self):
         raw = self.bundle().to_dict()
