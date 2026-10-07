@@ -273,6 +273,10 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         )
         self.auditor_public_key = encode_public_key(successor.public_key())
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=transition.transition_digest(),
+        )
 
         cmd = self.verify_cmd()
         gen_index = cmd.index("--expected-auditor-generation") + 1
@@ -364,6 +368,13 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         )
         self.auditor_public_key = encode_public_key(replacement.public_key())
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=recovery.recovery_digest(),
+            recovery_policy_generation=0,
+            recovery_policy_digest=policy.digest(),
+            recovery_policy_history_digest=RECOVERY_POLICY_TRANSITION_GENESIS,
+        )
 
         cmd = self.verify_cmd()
         gen_index = cmd.index("--expected-auditor-generation") + 1
@@ -519,6 +530,13 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             )
         )
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=recovery.recovery_digest(),
+            recovery_policy_generation=1,
+            recovery_policy_digest=new_policy.digest(),
+            recovery_policy_history_digest=policy_transition.transition_digest(),
+        )
 
         cmd = self.verify_cmd()
         cmd[cmd.index("--expected-auditor-generation") + 1] = "1"
@@ -777,6 +795,15 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             )
         )
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=recovery.recovery_digest(),
+            recovery_policy_generation=0,
+            recovery_policy_digest=policy.digest(),
+            recovery_policy_history_digest=RECOVERY_POLICY_TRANSITION_GENESIS,
+            revocation_generation=1,
+            revocation_digest=revocation.revocation_digest(),
+        )
 
         cmd = self.verify_cmd()
         cmd[cmd.index("--expected-auditor-generation") + 1] = "1"
