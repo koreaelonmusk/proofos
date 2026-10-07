@@ -20,15 +20,19 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from proofos.quorum_certificate import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from proofos.quorum_certificate import (  # noqa: E402
     QuorumCertificate,
     QuorumCertificateVerifier,
 )
-from proofos.transparency_gate import (
+from proofos.transparency_gate import (  # noqa: E402
     TransparencyState,
     evaluate_transparency,
 )
-from proofos.witness_gossip import WitnessGossipBundle, WitnessGossipVerifier
+from proofos.witness_gossip import WitnessGossipBundle, WitnessGossipVerifier  # noqa: E402
 
 
 def _read_json(path: Path) -> Any:
