@@ -324,6 +324,16 @@ def verify_governance_bundle(
     expected_governance_generation: int,
     expected_governance_head_digest: str,
 ) -> GovernanceQuorumResult:
+    # Direct dataclass construction is part of the exported API. Re-parse the
+    # materialized bundle so verification enforces the exact same structural
+    # invariants as the serialized boundary.
+    try:
+        bundle = GovernanceWitnessBundle.from_dict(bundle.to_dict())
+    except (GovernanceError, ValueError, TypeError) as exc:
+        raise GovernanceBindingError(
+            "governance bundle fails structural validation"
+        ) from exc
+
     if bundle.version != GOVERNANCE_SNAPSHOT_VERSION:
         raise GovernanceBindingError(
             f"unsupported governance bundle version {bundle.version!r}"
