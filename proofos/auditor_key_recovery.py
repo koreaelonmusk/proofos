@@ -451,8 +451,8 @@ def verify_auditor_key_history(
     entries: Iterable[AuditorKeyHistoryEntry],
     expected_generation: int,
     expected_head_digest: str,
-    recovery_policy: RecoveryPolicy,
-    expected_recovery_policy_digest: str,
+    recovery_policy: RecoveryPolicy | None = None,
+    expected_recovery_policy_digest: str | None = None,
 ) -> str:
     if isinstance(expected_generation, bool) or not isinstance(expected_generation, int):
         raise AuditorKeyRecoveryContinuityError(
@@ -472,6 +472,11 @@ def verify_auditor_key_history(
 
     for entry in entries:
         if isinstance(entry, AuditorKeyRecovery):
+            if recovery_policy is None or expected_recovery_policy_digest is None:
+                raise RecoveryPolicyError(
+                    "auditor key history contains emergency recovery but no "
+                    "externally pinned recovery policy was supplied"
+                )
             verify_recovery(
                 entry,
                 policy=recovery_policy,
