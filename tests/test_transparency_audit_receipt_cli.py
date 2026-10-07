@@ -53,6 +53,7 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
 
         self.auditor_key = Ed25519PrivateKey.generate()
         self.auditor_public_key = encode_public_key(self.auditor_key.public_key())
+        self.auditor_initial_public_key = self.auditor_public_key
 
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -126,7 +127,7 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             "--certificate-signer-id",
             "quorum-aggregator-v1",
             "--auditor-initial-public-key",
-            self.auditor_public_key,
+            self.auditor_initial_public_key,
             "--auditor-key-transitions",
             str(self.transitions_path),
             "--expected-auditor-generation",
