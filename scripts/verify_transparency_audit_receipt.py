@@ -23,6 +23,13 @@ from proofos.governance_witness import (  # noqa: E402
     parse_governance_history,
     verify_governance_history,
 )
+from proofos.governance_witness_policy_rotation import (  # noqa: E402
+    GOVERNANCE_WITNESS_POLICY_GENESIS,
+    parse_governance_witness_policy,
+    parse_governance_witness_policy_history,
+    policy_for_governance_generation,
+    verify_governance_witness_policy_chain,
+)
 from proofos.recovery_authority_revocation import (  # noqa: E402
     REVOCATION_GENESIS,
     parse_revocation_registry,
@@ -83,6 +90,10 @@ def main() -> int:
     parser.add_argument("--expected-auditor-revocation-head-digest")
     parser.add_argument("--governance-witness-bundle", type=Path, required=True)
     parser.add_argument("--expected-governance-witness-policy-digest", required=True)
+    parser.add_argument("--governance-witness-policy-initial", type=Path)
+    parser.add_argument("--governance-witness-policy-history", type=Path)
+    parser.add_argument("--expected-governance-witness-policy-generation", type=int)
+    parser.add_argument("--expected-governance-witness-policy-history-digest")
     parser.add_argument("--expected-governance-generation", type=int, required=True)
     parser.add_argument("--expected-governance-head-digest", required=True)
     parser.add_argument("--auditor-id", required=True)
@@ -102,9 +113,71 @@ def main() -> int:
         governance_history = parse_governance_history(
             _read_json(args.governance_witness_bundle)
         )
+
+        governance_policy_schedule = None
+        governance_policy_args = (
+            args.governance_witness_policy_initial,
+            args.governance_witness_policy_history,
+            args.expected_governance_witness_policy_generation,
+            args.expected_governance_witness_policy_history_digest,
+        )
+        if any(value is not None for value in governance_policy_args):
+            if args.governance_witness_policy_initial is None:
+                raise ValueError("initial governance witness policy is required")
+            if args.governance_witness_policy_history is None:
+                raise ValueError("governance witness policy history is required")
+            if args.expected_governance_witness_policy_generation is None:
+                raise ValueError(
+                    "expected governance witness policy generation is required"
+                )
+            if args.expected_governance_witness_policy_history_digest is None:
+                raise ValueError(
+                    "expected governance witness policy history digest is required"
+                )
+
+            initial_governance_policy = parse_governance_witness_policy(
+                _read_json(args.governance_witness_policy_initial)
+            )
+            governance_policy_transitions = (
+                parse_governance_witness_policy_history(
+                    _read_json(args.governance_witness_policy_history)
+                )
+            )
+            active_governance_policy, _ = verify_governance_witness_policy_chain(
+                initial_policy=initial_governance_policy,
+                transitions=governance_policy_transitions,
+                expected_generation=(
+                    args.expected_governance_witness_policy_generation
+                ),
+                expected_head_digest=(
+                    args.expected_governance_witness_policy_history_digest
+                ),
+            )
+            if (
+                active_governance_policy.digest()
+                != args.expected_governance_witness_policy_digest
+            ):
+                raise ValueError(
+                    "active governance witness policy digest does not match external pin"
+                )
+
+            governance_policy_schedule = tuple(
+                policy_for_governance_generation(
+                    initial_governance_policy,
+                    governance_policy_transitions,
+                    generation,
+                ).digest()
+                for generation in range(1, len(governance_history) + 1)
+            )
+
         governance_quorum = verify_governance_history(
             governance_history,
-            expected_policy_digest=args.expected_governance_witness_policy_digest,
+            expected_policy_digest=(
+                None
+                if governance_policy_schedule is not None
+                else args.expected_governance_witness_policy_digest
+            ),
+            expected_policy_digests=governance_policy_schedule,
             expected_governance_generation=args.expected_governance_generation,
             expected_governance_head_digest=args.expected_governance_head_digest,
         )
@@ -304,6 +377,16 @@ def main() -> int:
                 "governance_counted_witnesses": list(
                     governance_quorum.counted_witnesses
                 ),
+                "governance_witness_policy_generation": (
+                    args.expected_governance_witness_policy_generation
+                    if args.expected_governance_witness_policy_generation is not None
+                    else 0
+                ),
+                "governance_witness_policy_history_digest": (
+                    args.expected_governance_witness_policy_history_digest
+                    if args.expected_governance_witness_policy_history_digest is not None
+                    else GOVERNANCE_WITNESS_POLICY_GENESIS
+                ),
                 "auditor_key_generation": args.expected_auditor_generation,
                 "auditor_history_digest": args.expected_auditor_history_digest,
                 "auditor_recovery_policy_digest": (
@@ -320,6 +403,7 @@ def main() -> int:
                 "checkpoint_digest": receipt.checkpoint_digest,
                 "claim_boundary": [
                     "requires N-of-M witnesses to attest every governance snapshot in the pinned history",
+                    "derives governance witness policy from a two-quorum continuity chain when rotated",
                     "requires append-only governance snapshot continuity through the externally pinned head",
                     "verifies receipt signature and source-artifact binding",
                     "recomputes transparency from pinned public inputs",
