@@ -224,6 +224,30 @@ class GovernanceWitnessTests(unittest.TestCase):
         self.assertEqual(result.state, GovernanceQuorumState.QUORUM)
         self.assertEqual(result.snapshot_digest, integer_snapshot.snapshot_digest())
 
+    def test_history_verifier_rejects_malformed_materialized_bundle_before_field_access(self):
+        malformed = replace(self.bundle(), snapshot=None)
+        with self.assertRaisesRegex(
+            GovernanceBindingError,
+            "generation 1 fails structural validation",
+        ):
+            verify_governance_history(
+                (malformed,),
+                expected_policy_digest=self.policy.digest(),
+                expected_governance_generation=1,
+                expected_governance_head_digest="0" * 64,
+            )
+
+        with self.assertRaisesRegex(
+            GovernanceBindingError,
+            "generation 1 is not a GovernanceWitnessBundle",
+        ):
+            verify_governance_history(
+                (object(),),
+                expected_policy_digest=self.policy.digest(),
+                expected_governance_generation=1,
+                expected_governance_head_digest="0" * 64,
+            )
+
     def test_validly_signed_attestation_cannot_predate_snapshot(self):
         attestation = self.signers["a"].sign(
             self.snapshot,
