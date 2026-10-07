@@ -38,7 +38,7 @@ from .auditor_key_rotation import (
 from .integrity import canonical_payload, content_hash
 from .keys import encode_public_key
 
-AUDITOR_KEY_RECOVERY_VERSION = "proofos.auditor-key-recovery.v1"
+AUDITOR_KEY_RECOVERY_VERSION = "proofos.auditor-key-recovery.v2"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -60,6 +60,10 @@ class AuditorKeyRecoverySignatureInvalid(AuditorKeyRecoveryError):
 
 class AuditorKeyRecoveryContinuityError(AuditorKeyRecoveryError):
     pass
+
+
+class AuditorKeyRevokedIntervalError(AuditorKeyRecoveryContinuityError):
+    """Raised when a receipt falls inside a known compromise/recovery gap."""
 
 
 @dataclass(frozen=True)
@@ -188,6 +192,7 @@ class AuditorKeyRecovery:
     previous_history_digest: str
     recovery_policy_digest: str
     incident_id: str
+    compromised_at: float
     issued_at: float
     approvals: tuple[RecoveryApproval, ...]
     replacement_key_signature: str
@@ -202,6 +207,7 @@ class AuditorKeyRecovery:
             "previous_history_digest": self.previous_history_digest,
             "recovery_policy_digest": self.recovery_policy_digest,
             "incident_id": self.incident_id,
+            "compromised_at": self.compromised_at,
             "issued_at": self.issued_at,
         }
 
@@ -231,6 +237,7 @@ class AuditorKeyRecovery:
             "previous_history_digest",
             "recovery_policy_digest",
             "incident_id",
+            "compromised_at",
             "issued_at",
             "approvals",
             "replacement_key_signature",
@@ -263,6 +270,7 @@ class AuditorKeyRecovery:
                 data["recovery_policy_digest"], "recovery_policy_digest"
             ),
             incident_id=_nonempty_str(data["incident_id"], "incident_id"),
+            compromised_at=_float(data["compromised_at"], "compromised_at"),
             issued_at=_float(data["issued_at"], "issued_at"),
             approvals=approvals,
             replacement_key_signature=_canonical_signature(
@@ -279,6 +287,10 @@ class AuditorKeyRecovery:
             raise MalformedAuditorKeyRecovery(
                 "recovery must replace the compromised key"
             )
+        if recovery.compromised_at > recovery.issued_at:
+            raise MalformedAuditorKeyRecovery(
+                "compromised_at cannot be after recovery issued_at"
+            )
         return recovery
 
 
@@ -292,6 +304,7 @@ class AuditorKeyRecoverySigner:
         replacement_private_key: Ed25519PrivateKey,
         previous_history_digest: str,
         incident_id: str,
+        compromised_at: float,
         policy: RecoveryPolicy,
         authority_private_keys: Mapping[str, Ed25519PrivateKey],
         issued_at: float | None = None,
@@ -314,9 +327,14 @@ class AuditorKeyRecoverySigner:
         if replacement_public_key == compromised_public_key:
             raise ValueError("recovery must replace the compromised key")
 
+        compromised = float(compromised_at)
+        if not math.isfinite(compromised):
+            raise ValueError("compromised_at must be finite")
         stamp = time.time() if issued_at is None else float(issued_at)
         if not math.isfinite(stamp):
             raise ValueError("issued_at must be finite")
+        if compromised > stamp:
+            raise ValueError("compromised_at cannot be after recovery issued_at")
 
         unsigned = AuditorKeyRecovery(
             version=AUDITOR_KEY_RECOVERY_VERSION,
@@ -327,6 +345,7 @@ class AuditorKeyRecoverySigner:
             previous_history_digest=previous_history_digest,
             recovery_policy_digest=policy.digest(),
             incident_id=incident_id,
+            compromised_at=compromised,
             issued_at=stamp,
             approvals=(),
             replacement_key_signature="",
@@ -386,6 +405,14 @@ def verify_recovery(
     if recovery.compromised_public_key == recovery.replacement_public_key:
         raise AuditorKeyRecoveryContinuityError(
             "recovery did not replace the compromised key"
+        )
+    if not math.isfinite(recovery.compromised_at):
+        raise AuditorKeyRecoveryContinuityError("compromised_at must be finite")
+    if not math.isfinite(recovery.issued_at):
+        raise AuditorKeyRecoveryContinuityError("issued_at must be finite")
+    if recovery.compromised_at > recovery.issued_at:
+        raise AuditorKeyRecoveryContinuityError(
+            "compromised_at cannot be after recovery issued_at"
         )
 
     if len(recovery.approvals) < policy.threshold:
