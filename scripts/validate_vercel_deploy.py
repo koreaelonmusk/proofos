@@ -99,7 +99,9 @@ def validate() -> list[str]:
         issues.append("missing_required_routes:" + ",".join(missing_routes))
 
     vercel_json = ROOT / "vercel.json"
-    if vercel_json.exists():
+    if not vercel_json.exists():
+        issues.append("vercel_json_missing")
+    else:
         try:
             config = json.loads(vercel_json.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
