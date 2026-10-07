@@ -306,6 +306,10 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         )
         self.transitions_path.write_text("[]", encoding="utf-8")
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=transition.transition_digest(),
+        )
 
         cmd = self.verify_cmd()
         gen_index = cmd.index("--expected-auditor-generation") + 1
@@ -443,6 +447,13 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             )
         )
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=recovery.recovery_digest(),
+            recovery_policy_generation=0,
+            recovery_policy_digest=policy.digest(),
+            recovery_policy_history_digest=RECOVERY_POLICY_TRANSITION_GENESIS,
+        )
 
         cmd = self.verify_cmd()
         gen_index = cmd.index("--expected-auditor-generation") + 1
@@ -609,6 +620,11 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         policy_initial.write_text(json.dumps(old_policy.to_dict()), encoding="utf-8")
         policy_history.write_text("[]", encoding="utf-8")
         self.create_receipt()
+        self.write_governance(
+            recovery_policy_generation=1,
+            recovery_policy_digest=new_policy.digest(),
+            recovery_policy_history_digest=policy_transition.transition_digest(),
+        )
 
         cmd = self.verify_cmd()
         cmd.extend(
@@ -700,6 +716,15 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             )
         )
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=recovery.recovery_digest(),
+            recovery_policy_generation=0,
+            recovery_policy_digest=policy.digest(),
+            recovery_policy_history_digest=RECOVERY_POLICY_TRANSITION_GENESIS,
+            revocation_generation=1,
+            revocation_digest=revocation.revocation_digest(),
+        )
 
         cmd = self.verify_cmd()
         cmd[cmd.index("--expected-auditor-generation") + 1] = "1"
