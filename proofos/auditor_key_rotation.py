@@ -174,6 +174,8 @@ class AuditorKeyTransitionSigner:
     ) -> AuditorKeyTransition:
         if not auditor_id.strip():
             raise ValueError("auditor_id must not be empty")
+        if isinstance(generation, bool) or not isinstance(generation, int):
+            raise ValueError("generation must be an integer")
         if generation < 1:
             raise ValueError("generation must be >= 1")
         if not _SHA256_RE.fullmatch(previous_transition_digest):
@@ -255,11 +257,23 @@ def verify_transition_chain(
     auditor_id: str,
     initial_public_key: str,
     transitions: Iterable[AuditorKeyTransition],
+    expected_generation: int,
+    expected_head_digest: str,
 ) -> str:
-    """Verify complete key continuity and return the final trusted public key."""
+    """Verify complete key continuity against an independently pinned chain head."""
+    if isinstance(expected_generation, bool) or not isinstance(expected_generation, int):
+        raise AuditorKeyContinuityError("expected_generation must be an integer")
+    if expected_generation < 0:
+        raise AuditorKeyContinuityError("expected_generation must be >= 0")
+    if not _SHA256_RE.fullmatch(expected_head_digest):
+        raise AuditorKeyContinuityError(
+            "expected_head_digest is not a SHA-256 digest"
+        )
+
     current_key = _public_key(initial_public_key, "initial_public_key")
     previous_digest = KEY_TRANSITION_GENESIS
-    expected_generation = 1
+    next_generation = 1
+    verified_count = 0
 
     for transition in transitions:
         verify_transition(transition)
@@ -268,9 +282,9 @@ def verify_transition_chain(
             raise AuditorKeyContinuityError(
                 f"transition belongs to {transition.auditor_id!r}, not {auditor_id!r}"
             )
-        if transition.generation != expected_generation:
+        if transition.generation != next_generation:
             raise AuditorKeyContinuityError(
-                f"expected auditor key generation {expected_generation}, "
+                f"expected auditor key generation {next_generation}, "
                 f"got {transition.generation}"
             )
         if transition.previous_public_key != current_key:
@@ -286,11 +300,19 @@ def verify_transition_chain(
 
         current_key = transition.next_public_key
         previous_digest = transition.transition_digest()
-        expected_generation += 1
+        verified_count += 1
+        next_generation += 1
 
+    if verified_count != expected_generation:
+        raise AuditorKeyContinuityError(
+            f"auditor key chain rollback or truncation: expected generation "
+            f"{expected_generation}, verified {verified_count}"
+        )
+    if previous_digest != expected_head_digest:
+        raise AuditorKeyContinuityError(
+            "auditor key chain head digest does not match external pin"
+        )
     return current_key
-
-
 def _decode_public_key(encoded: str) -> Ed25519PublicKey:
     try:
         raw = base64.b64decode(encoded, validate=True)
@@ -316,6 +338,10 @@ def _verify_signature(
     if len(signature) != 64:
         raise AuditorKeyTransitionSignatureInvalid(
             f"{label} Ed25519 signature is {len(signature)} bytes, expected 64"
+        )
+    if base64.b64encode(signature).decode("ascii") != encoded_signature:
+        raise AuditorKeyTransitionSignatureInvalid(
+            f"{label} signature is not canonical base64"
         )
     try:
         key.verify(signature, payload)
@@ -375,6 +401,10 @@ def _public_key(value: Any, field: str) -> str:
         raise MalformedAuditorKeyTransition(
             f"{field} decoded to {len(raw)} bytes, expected 32"
         )
+    if base64.b64encode(raw).decode("ascii") != value:
+        raise MalformedAuditorKeyTransition(
+            f"{field} must use canonical base64"
+        )
     return value
 
 
@@ -389,6 +419,10 @@ def _signature(value: Any, field: str) -> str:
     if len(raw) != 64:
         raise MalformedAuditorKeyTransition(
             f"{field} decoded to {len(raw)} bytes, expected 64"
+        )
+    if base64.b64encode(raw).decode("ascii") != value:
+        raise MalformedAuditorKeyTransition(
+            f"{field} must use canonical base64"
         )
     return value
 
