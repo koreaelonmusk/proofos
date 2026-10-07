@@ -21,6 +21,10 @@ from proofos.auditor_key_rotation import (
 )
 from proofos.keys import encode_public_key
 from proofos.quorum_certificate import QuorumCertificateSigner
+from proofos.recovery_policy_rotation import (
+    RECOVERY_POLICY_TRANSITION_GENESIS,
+    RecoveryPolicyTransitionSigner,
+)
 from proofos.witness_gossip import WitnessGossipSigner
 from tests.test_witness_gossip import T0, fixture
 
@@ -371,6 +375,175 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         self.assertFalse(report["valid"])
         self.assertIn("recovery policy", report["detail"])
 
+    def test_public_verifier_accepts_rotated_recovery_policy(self):
+        old_a = Ed25519PrivateKey.generate()
+        old_b = Ed25519PrivateKey.generate()
+        old_c = Ed25519PrivateKey.generate()
+        old_policy = RecoveryPolicy(
+            "auditor-recovery-old",
+            (
+                ("old-a", encode_public_key(old_a.public_key())),
+                ("old-b", encode_public_key(old_b.public_key())),
+                ("old-c", encode_public_key(old_c.public_key())),
+            ),
+            2,
+        )
+        new_a = Ed25519PrivateKey.generate()
+        new_b = Ed25519PrivateKey.generate()
+        new_c = Ed25519PrivateKey.generate()
+        new_policy = RecoveryPolicy(
+            "auditor-recovery-new",
+            (
+                ("new-a", encode_public_key(new_a.public_key())),
+                ("new-b", encode_public_key(new_b.public_key())),
+                ("new-c", encode_public_key(new_c.public_key())),
+            ),
+            2,
+        )
+        policy_transition = RecoveryPolicyTransitionSigner.sign(
+            generation=1,
+            previous_policy=old_policy,
+            next_policy=new_policy,
+            previous_authority_private_keys={"old-a": old_a, "old-b": old_b},
+            next_authority_private_keys={"new-a": new_a, "new-b": new_b},
+            previous_transition_digest=RECOVERY_POLICY_TRANSITION_GENESIS,
+            issued_at=T0 + 95,
+        )
+        replacement = Ed25519PrivateKey.generate()
+        recovery = AuditorKeyRecoverySigner.sign(
+            auditor_id="external-auditor-v1",
+            generation=1,
+            compromised_public_key=self.auditor_initial_public_key,
+            replacement_private_key=replacement,
+            previous_history_digest=KEY_TRANSITION_GENESIS,
+            incident_id="INC-CLI-POLICY-ROTATE",
+            policy=new_policy,
+            authority_private_keys={"new-a": new_a, "new-c": new_c},
+            issued_at=T0 + 96,
+        )
+
+        policy_initial = pathlib.Path(self.tmp.name) / "recovery-policy-initial.json"
+        policy_history = pathlib.Path(self.tmp.name) / "recovery-policy-history.json"
+        policy_initial.write_text(
+            json.dumps(old_policy.to_dict()),
+            encoding="utf-8",
+        )
+        policy_history.write_text(
+            json.dumps([policy_transition.to_dict()]),
+            encoding="utf-8",
+        )
+        self.transitions_path.write_text(
+            json.dumps([recovery.to_dict()]),
+            encoding="utf-8",
+        )
+        self.key_path.write_bytes(
+            replacement.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+        self.create_receipt()
+
+        cmd = self.verify_cmd()
+        cmd[cmd.index("--expected-auditor-generation") + 1] = "1"
+        cmd[cmd.index("--expected-auditor-transition-digest") + 1] = (
+            recovery.recovery_digest()
+        )
+        cmd.extend(
+            [
+                "--auditor-recovery-initial-policy",
+                str(policy_initial),
+                "--auditor-recovery-policy-history",
+                str(policy_history),
+                "--expected-auditor-recovery-policy-generation",
+                "1",
+                "--expected-auditor-recovery-policy-history-digest",
+                policy_transition.transition_digest(),
+                "--expected-auditor-recovery-policy-digest",
+                new_policy.digest(),
+            ]
+        )
+        result = subprocess.run(
+            cmd,
+            cwd=self.outside,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["auditor_recovery_policy_generation"], 1)
+        self.assertEqual(
+            report["auditor_recovery_policy_digest"],
+            new_policy.digest(),
+        )
+
+    def test_public_verifier_rejects_stale_recovery_policy_prefix(self):
+        old_a = Ed25519PrivateKey.generate()
+        old_b = Ed25519PrivateKey.generate()
+        old_policy = RecoveryPolicy(
+            "auditor-recovery-old",
+            (
+                ("old-a", encode_public_key(old_a.public_key())),
+                ("old-b", encode_public_key(old_b.public_key())),
+            ),
+            2,
+        )
+        new_a = Ed25519PrivateKey.generate()
+        new_b = Ed25519PrivateKey.generate()
+        new_policy = RecoveryPolicy(
+            "auditor-recovery-new",
+            (
+                ("new-a", encode_public_key(new_a.public_key())),
+                ("new-b", encode_public_key(new_b.public_key())),
+            ),
+            2,
+        )
+        policy_transition = RecoveryPolicyTransitionSigner.sign(
+            generation=1,
+            previous_policy=old_policy,
+            next_policy=new_policy,
+            previous_authority_private_keys={"old-a": old_a, "old-b": old_b},
+            next_authority_private_keys={"new-a": new_a, "new-b": new_b},
+            previous_transition_digest=RECOVERY_POLICY_TRANSITION_GENESIS,
+            issued_at=T0 + 95,
+        )
+
+        policy_initial = pathlib.Path(self.tmp.name) / "recovery-policy-initial.json"
+        policy_history = pathlib.Path(self.tmp.name) / "recovery-policy-history.json"
+        policy_initial.write_text(json.dumps(old_policy.to_dict()), encoding="utf-8")
+        policy_history.write_text("[]", encoding="utf-8")
+        self.create_receipt()
+
+        cmd = self.verify_cmd()
+        cmd.extend(
+            [
+                "--auditor-recovery-initial-policy",
+                str(policy_initial),
+                "--auditor-recovery-policy-history",
+                str(policy_history),
+                "--expected-auditor-recovery-policy-generation",
+                "1",
+                "--expected-auditor-recovery-policy-history-digest",
+                policy_transition.transition_digest(),
+                "--expected-auditor-recovery-policy-digest",
+                new_policy.digest(),
+            ]
+        )
+        result = subprocess.run(
+            cmd,
+            cwd=self.outside,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 2)
+        report = json.loads(result.stdout)
+        self.assertFalse(report["valid"])
+        self.assertIn("rollback", report["detail"])
+
     def test_signer_refuses_to_overwrite_existing_receipt(self):
         self.create_receipt()
         second = subprocess.run(
@@ -455,6 +628,12 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         self.assertIn("--expected-auditor-generation", result.stdout)
         self.assertIn("--auditor-recovery-policy", result.stdout)
         self.assertIn("--expected-auditor-recovery-policy-digest", result.stdout)
+        self.assertIn("--auditor-recovery-policy-history", result.stdout)
+        self.assertIn("--expected-auditor-recovery-policy-generation", result.stdout)
+        self.assertIn(
+            "--expected-auditor-recovery-policy-history-digest",
+            result.stdout,
+        )
 
 
 if __name__ == "__main__":
