@@ -161,6 +161,25 @@ class GovernanceWitnessTests(unittest.TestCase):
                         ),
                     )
 
+    def test_exported_verifier_revalidates_directly_materialized_snapshot_fields(self):
+        malformed_snapshots = (
+            replace(self.snapshot, auditor_history_generation=-1),
+            replace(self.snapshot, recovery_policy_generation=-1),
+            replace(self.snapshot, revocation_generation=-1),
+            replace(self.snapshot, auditor_history_digest="not-a-digest"),
+            replace(self.snapshot, issued_at=float("inf")),
+        )
+        for snapshot in malformed_snapshots:
+            bundle = replace(self.bundle(), snapshot=snapshot)
+            with self.subTest(snapshot=snapshot):
+                with self.assertRaises(GovernanceBindingError):
+                    verify_governance_bundle(
+                        bundle,
+                        expected_policy_digest=self.policy.digest(),
+                        expected_governance_generation=snapshot.governance_generation,
+                        expected_governance_head_digest="0" * 64,
+                    )
+
     def test_validly_signed_attestation_cannot_predate_snapshot(self):
         attestation = self.signers["a"].sign(
             self.snapshot,
