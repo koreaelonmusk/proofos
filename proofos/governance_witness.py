@@ -324,6 +324,21 @@ def verify_governance_bundle(
     expected_governance_generation: int,
     expected_governance_head_digest: str,
 ) -> GovernanceQuorumResult:
+    # Direct dataclass construction is part of the exported API. Re-parse the
+    # materialized bundle so verification enforces the exact same structural
+    # invariants as the serialized boundary. Reject malformed object graphs at
+    # this boundary instead of leaking implementation exceptions to callers.
+    if not isinstance(bundle, GovernanceWitnessBundle):
+        raise GovernanceBindingError(
+            "governance bundle must be a GovernanceWitnessBundle"
+        )
+    try:
+        bundle = GovernanceWitnessBundle.from_dict(bundle.to_dict())
+    except (GovernanceError, ValueError, TypeError, AttributeError) as exc:
+        raise GovernanceBindingError(
+            "governance bundle fails structural validation"
+        ) from exc
+
     if bundle.version != GOVERNANCE_SNAPSHOT_VERSION:
         raise GovernanceBindingError(
             f"unsupported governance bundle version {bundle.version!r}"
@@ -451,6 +466,17 @@ def verify_governance_history(
     previous_digest = GOVERNANCE_GENESIS
     final_result: GovernanceQuorumResult | None = None
     for generation, bundle in enumerate(bundles, start=1):
+        if not isinstance(bundle, GovernanceWitnessBundle):
+            raise GovernanceBindingError(
+                f"governance generation {generation} is not a GovernanceWitnessBundle"
+            )
+        try:
+            bundle = GovernanceWitnessBundle.from_dict(bundle.to_dict())
+        except (GovernanceError, ValueError, TypeError, AttributeError) as exc:
+            raise GovernanceBindingError(
+                f"governance generation {generation} fails structural validation"
+            ) from exc
+
         snapshot = bundle.snapshot
         if snapshot.governance_generation != generation:
             raise GovernanceBindingError(
@@ -613,13 +639,15 @@ def _nonnegative_int(value: Any, field: str) -> int:
     return result
 
 
-def _finite_float(value: Any, field: str) -> float:
+def _finite_float(value: Any, field: str) -> int | float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise MalformedGovernanceSnapshot(f"{field} must be a number")
-    result = float(value)
-    if not math.isfinite(result):
+    if not math.isfinite(float(value)):
         raise MalformedGovernanceSnapshot(f"{field} must be finite")
-    return result
+    # Preserve the caller's numeric representation. Canonical JSON signs
+    # integers and floats differently, so coercing 100 -> 100.0 during
+    # structural revalidation would mutate a digest-bearing value.
+    return value
 
 
 def _digest(value: Any, field: str) -> str:

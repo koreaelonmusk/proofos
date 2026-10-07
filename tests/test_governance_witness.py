@@ -161,6 +161,93 @@ class GovernanceWitnessTests(unittest.TestCase):
                         ),
                     )
 
+    def test_exported_verifier_revalidates_directly_materialized_snapshot_fields(self):
+        malformed_snapshots = (
+            replace(self.snapshot, auditor_history_generation=-1),
+            replace(self.snapshot, recovery_policy_generation=-1),
+            replace(self.snapshot, revocation_generation=-1),
+            replace(self.snapshot, auditor_history_digest="not-a-digest"),
+            replace(self.snapshot, issued_at=float("inf")),
+        )
+        for snapshot in malformed_snapshots:
+            bundle = replace(self.bundle(), snapshot=snapshot)
+            with self.subTest(snapshot=snapshot):
+                with self.assertRaises(GovernanceBindingError):
+                    verify_governance_bundle(
+                        bundle,
+                        expected_policy_digest=self.policy.digest(),
+                        expected_governance_generation=snapshot.governance_generation,
+                        expected_governance_head_digest="0" * 64,
+                    )
+
+    def test_exported_verifier_rejects_malformed_materialized_object_graphs(self):
+        malformed_bundles = (
+            replace(self.bundle(), policy=None),
+            replace(self.bundle(), snapshot=None),
+            replace(self.bundle(), attestations=(object(),)),
+        )
+        for bundle in malformed_bundles:
+            with self.subTest(bundle=bundle):
+                with self.assertRaises(GovernanceBindingError):
+                    verify_governance_bundle(
+                        bundle,
+                        expected_policy_digest=self.policy.digest(),
+                        expected_governance_generation=1,
+                        expected_governance_head_digest="0" * 64,
+                    )
+
+        with self.assertRaises(GovernanceBindingError):
+            verify_governance_bundle(
+                object(),
+                expected_policy_digest=self.policy.digest(),
+                expected_governance_generation=1,
+                expected_governance_head_digest="0" * 64,
+            )
+
+    def test_structural_revalidation_preserves_integer_snapshot_timestamp(self):
+        integer_snapshot = replace(self.snapshot, issued_at=100)
+        bundle = GovernanceWitnessBundle(
+            version=GOVERNANCE_SNAPSHOT_VERSION,
+            snapshot=integer_snapshot,
+            policy=self.policy,
+            attestations=tuple(
+                self.signers[wid].sign(integer_snapshot, observed_at=101)
+                for wid in ("a", "b")
+            ),
+        )
+        result = verify_governance_bundle(
+            bundle,
+            expected_policy_digest=self.policy.digest(),
+            expected_governance_generation=1,
+            expected_governance_head_digest=integer_snapshot.snapshot_digest(),
+        )
+        self.assertEqual(result.state, GovernanceQuorumState.QUORUM)
+        self.assertEqual(result.snapshot_digest, integer_snapshot.snapshot_digest())
+
+    def test_history_verifier_rejects_malformed_materialized_bundle_before_field_access(self):
+        malformed = replace(self.bundle(), snapshot=None)
+        with self.assertRaisesRegex(
+            GovernanceBindingError,
+            "generation 1 fails structural validation",
+        ):
+            verify_governance_history(
+                (malformed,),
+                expected_policy_digest=self.policy.digest(),
+                expected_governance_generation=1,
+                expected_governance_head_digest="0" * 64,
+            )
+
+        with self.assertRaisesRegex(
+            GovernanceBindingError,
+            "generation 1 is not a GovernanceWitnessBundle",
+        ):
+            verify_governance_history(
+                (object(),),
+                expected_policy_digest=self.policy.digest(),
+                expected_governance_generation=1,
+                expected_governance_head_digest="0" * 64,
+            )
+
     def test_validly_signed_attestation_cannot_predate_snapshot(self):
         attestation = self.signers["a"].sign(
             self.snapshot,
