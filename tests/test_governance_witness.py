@@ -204,6 +204,26 @@ class GovernanceWitnessTests(unittest.TestCase):
                 expected_governance_head_digest="0" * 64,
             )
 
+    def test_structural_revalidation_preserves_integer_snapshot_timestamp(self):
+        integer_snapshot = replace(self.snapshot, issued_at=100)
+        bundle = GovernanceWitnessBundle(
+            version=GOVERNANCE_SNAPSHOT_VERSION,
+            snapshot=integer_snapshot,
+            policy=self.policy,
+            attestations=tuple(
+                self.signers[wid].sign(integer_snapshot, observed_at=101)
+                for wid in ("a", "b")
+            ),
+        )
+        result = verify_governance_bundle(
+            bundle,
+            expected_policy_digest=self.policy.digest(),
+            expected_governance_generation=1,
+            expected_governance_head_digest=integer_snapshot.snapshot_digest(),
+        )
+        self.assertEqual(result.state, GovernanceQuorumState.QUORUM)
+        self.assertEqual(result.snapshot_digest, integer_snapshot.snapshot_digest())
+
     def test_validly_signed_attestation_cannot_predate_snapshot(self):
         attestation = self.signers["a"].sign(
             self.snapshot,
