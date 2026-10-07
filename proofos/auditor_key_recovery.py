@@ -372,6 +372,7 @@ def verify_recovery(
     *,
     policy: RecoveryPolicy,
     expected_policy_digest: str,
+    revoked_authorities: Mapping[str, int] | None = None,
 ) -> None:
     if recovery.version != AUDITOR_KEY_RECOVERY_VERSION:
         raise AuditorKeyRecoveryContinuityError(
@@ -396,6 +397,7 @@ def verify_recovery(
 
     payload = recovery.signing_bytes()
     allowed = set(policy.authority_ids)
+    revoked_authorities = revoked_authorities or {}
     seen: set[str] = set()
     for approval in recovery.approvals:
         if approval.authority_id in seen:
@@ -404,6 +406,15 @@ def verify_recovery(
         if approval.authority_id not in allowed:
             raise RecoveryPolicyError(
                 f"authority {approval.authority_id!r} is not allowed"
+            )
+        effective_from = revoked_authorities.get(approval.authority_id)
+        if (
+            effective_from is not None
+            and effective_from <= recovery.generation
+        ):
+            raise RecoveryPolicyError(
+                f"authority {approval.authority_id!r} is revoked for "
+                f"auditor generation {recovery.generation}"
             )
         key = _decode_public_key(policy.public_key_for(approval.authority_id))
         _verify_signature(
@@ -453,6 +464,7 @@ def verify_auditor_key_history(
     expected_head_digest: str,
     recovery_policy: RecoveryPolicy | None = None,
     expected_recovery_policy_digest: str | None = None,
+    revoked_authorities: Mapping[str, int] | None = None,
 ) -> str:
     if isinstance(expected_generation, bool) or not isinstance(expected_generation, int):
         raise AuditorKeyRecoveryContinuityError(
@@ -481,6 +493,7 @@ def verify_auditor_key_history(
                 entry,
                 policy=recovery_policy,
                 expected_policy_digest=expected_recovery_policy_digest,
+                revoked_authorities=revoked_authorities,
             )
             if entry.auditor_id != auditor_id:
                 raise AuditorKeyRecoveryContinuityError(
