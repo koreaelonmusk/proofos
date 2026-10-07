@@ -18,8 +18,9 @@ from proofos.transparency_audit_receipt import (
     TransparencyAuditReceiptSigner,
     TransparencyAuditReceiptVerifier,
 )
-from proofos.transparency_gate import evaluate_transparency
+from proofos.transparency_gate import TransparencyState, evaluate_transparency
 from proofos.witness_gossip import WitnessGossipSigner, WitnessGossipVerifier
+from proofos.witness_quorum import WitnessVote, evaluate_witness_quorum
 from tests.test_witness_gossip import T0, fixture
 
 
@@ -87,6 +88,75 @@ class TransparencyAuditReceiptTests(unittest.TestCase):
             self.certificate,
         )
         self.assertEqual(parsed.version, TRANSPARENCY_AUDIT_RECEIPT_VERSION)
+
+    def test_split_view_receipt_round_trips_with_empty_digest_sentinel(self):
+        second = self.votes[1]
+        changed_record = replace(
+            second.record,
+            checkpoint_digest="e" * 64,
+            record_hash="",
+        )
+        changed_record = replace(
+            changed_record,
+            record_hash=changed_record.compute_hash(),
+        )
+        changed_receipt = self.witness_signers["witness-b"].sign(
+            changed_record,
+            issued_at=T0 + 60,
+        )
+        split_votes = (
+            self.votes[0],
+            WitnessVote(changed_receipt, changed_record),
+        )
+        split = evaluate_witness_quorum(
+            split_votes,
+            verifiers=self.verifiers,
+            policy=self.policy,
+            expected_policy_digest=self.policy.digest(),
+        )
+        split_bundle = self.gossip_signer.sign(
+            policy=self.policy,
+            result=split,
+            votes=split_votes,
+            issued_at=T0 + 61,
+        )
+        gossip_verifier = WitnessGossipVerifier.from_b64(
+            self.gossip_signer.public_key_b64(),
+            "gossip-publisher-v1",
+        )
+        split_result = evaluate_transparency(
+            split_bundle,
+            gossip_verifier=gossip_verifier,
+            expected_policy_digest=self.policy.digest(),
+        )
+        self.assertEqual(split_result.state, TransparencyState.REJECTED_SPLIT_VIEW)
+        receipt = self.signer.sign(
+            split_result,
+            split_bundle,
+            None,
+            issued_at=T0 + 62,
+        )
+        parsed = TransparencyAuditReceipt.from_dict(receipt.to_dict())
+        self.assertEqual(parsed.checkpoint_digest, "")
+        self.verifier.verify(parsed, split_result, split_bundle, None)
+
+    def test_accepted_result_cannot_be_signed_without_certificate_artifact(self):
+        with self.assertRaises(TransparencyAuditReceiptBindingError):
+            self.signer.sign(
+                self.result,
+                self.bundle,
+                None,
+                issued_at=T0 + 52,
+            )
+
+    def test_accepted_receipt_cannot_be_verified_without_certificate_artifact(self):
+        with self.assertRaises(TransparencyAuditReceiptBindingError):
+            self.verifier.verify(
+                self.receipt,
+                self.result,
+                self.bundle,
+                None,
+            )
 
     def test_signature_tampering_is_rejected(self):
         raw = bytearray(base64.b64decode(self.receipt.signature))
