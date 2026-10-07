@@ -14,9 +14,10 @@ for entry in (str(ROOT), str(SCRIPTS)):
         sys.path.insert(0, entry)
 
 from audit_transparency import _read_json, evaluate_artifacts  # noqa: E402
-from proofos.auditor_key_rotation import (  # noqa: E402
-    AuditorKeyTransition,
-    verify_transition_chain,
+from proofos.auditor_key_recovery import (  # noqa: E402
+    RecoveryPolicy,
+    parse_auditor_key_history,
+    verify_auditor_key_history,
 )
 from proofos.transparency_audit_receipt import (  # noqa: E402
     TransparencyAuditReceipt,
@@ -37,9 +38,22 @@ def main() -> int:
     parser.add_argument("--certificate-public-key")
     parser.add_argument("--certificate-signer-id")
     parser.add_argument("--auditor-initial-public-key", required=True)
-    parser.add_argument("--auditor-key-transitions", type=Path, required=True)
+    parser.add_argument(
+        "--auditor-key-history",
+        "--auditor-key-transitions",
+        dest="auditor_key_history",
+        type=Path,
+        required=True,
+    )
     parser.add_argument("--expected-auditor-generation", type=int, required=True)
-    parser.add_argument("--expected-auditor-transition-digest", required=True)
+    parser.add_argument(
+        "--expected-auditor-history-digest",
+        "--expected-auditor-transition-digest",
+        dest="expected_auditor_history_digest",
+        required=True,
+    )
+    parser.add_argument("--auditor-recovery-policy", type=Path)
+    parser.add_argument("--expected-auditor-recovery-policy-digest")
     parser.add_argument("--auditor-id", required=True)
     args = parser.parse_args()
 
@@ -54,18 +68,35 @@ def main() -> int:
             certificate_signer_id=args.certificate_signer_id,
         )
         receipt = TransparencyAuditReceipt.from_dict(_read_json(args.receipt))
-        raw_transitions = _read_json(args.auditor_key_transitions)
-        if not isinstance(raw_transitions, list):
-            raise ValueError("auditor key transitions must be a JSON array")
-        transitions = tuple(
-            AuditorKeyTransition.from_dict(item) for item in raw_transitions
+        history = parse_auditor_key_history(
+            _read_json(args.auditor_key_history)
         )
-        trusted_auditor_key = verify_transition_chain(
+        recovery_policy = None
+        if args.auditor_recovery_policy is not None:
+            recovery_policy = RecoveryPolicy.from_dict(
+                _read_json(args.auditor_recovery_policy)
+            )
+        if (
+            args.auditor_recovery_policy is None
+            and args.expected_auditor_recovery_policy_digest is not None
+        ) or (
+            args.auditor_recovery_policy is not None
+            and args.expected_auditor_recovery_policy_digest is None
+        ):
+            raise ValueError(
+                "recovery policy and expected recovery-policy digest must "
+                "be supplied together"
+            )
+        trusted_auditor_key = verify_auditor_key_history(
             auditor_id=args.auditor_id,
             initial_public_key=args.auditor_initial_public_key,
-            transitions=transitions,
+            entries=history,
             expected_generation=args.expected_auditor_generation,
-            expected_head_digest=args.expected_auditor_transition_digest,
+            expected_head_digest=args.expected_auditor_history_digest,
+            recovery_policy=recovery_policy,
+            expected_recovery_policy_digest=(
+                args.expected_auditor_recovery_policy_digest
+            ),
         )
         verifier = TransparencyAuditReceiptVerifier.from_b64(
             trusted_auditor_key,
@@ -87,14 +118,18 @@ def main() -> int:
                 "valid": True,
                 "auditor_id": receipt.auditor_id,
                 "auditor_key_generation": args.expected_auditor_generation,
-                "auditor_transition_digest": args.expected_auditor_transition_digest,
+                "auditor_history_digest": args.expected_auditor_history_digest,
+                "auditor_recovery_policy_digest": (
+                    args.expected_auditor_recovery_policy_digest
+                ),
                 "transparency_state": receipt.transparency_state,
                 "audit_result_digest": receipt.audit_result_digest,
                 "checkpoint_digest": receipt.checkpoint_digest,
                 "claim_boundary": [
                     "verifies receipt signature and source-artifact binding",
                     "recomputes transparency from pinned public inputs",
-                    "derives the active auditor key from a pinned initial key and transition chain",
+                    "derives the active auditor key from a pinned initial key and verified key history",
+                    "requires pinned N-of-M recovery authority for emergency recovery entries",
                     "requires no private key or network access",
                     "does not decide task completion or grant execution authority",
                 ],
