@@ -628,13 +628,15 @@ def _nonnegative_int(value: Any, field: str) -> int:
     return result
 
 
-def _finite_float(value: Any, field: str) -> float:
+def _finite_float(value: Any, field: str) -> int | float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise MalformedGovernanceSnapshot(f"{field} must be a number")
-    result = float(value)
-    if not math.isfinite(result):
+    if not math.isfinite(float(value)):
         raise MalformedGovernanceSnapshot(f"{field} must be finite")
-    return result
+    # Preserve the caller's numeric representation. Canonical JSON signs
+    # integers and floats differently, so coercing 100 -> 100.0 during
+    # structural revalidation would mutate a digest-bearing value.
+    return value
 
 
 def _digest(value: Any, field: str) -> str:
