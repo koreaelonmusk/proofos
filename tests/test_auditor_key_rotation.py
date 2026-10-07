@@ -57,6 +57,8 @@ class AuditorKeyRotationTests(unittest.TestCase):
             auditor_id=AUDITOR,
             initial_public_key=self.p1,
             transitions=(parsed1, parsed2),
+            expected_generation=2,
+            expected_head_digest=parsed2.transition_digest(),
         )
         self.assertEqual(final, self.p3)
         self.assertEqual(parsed1.version, AUDITOR_KEY_TRANSITION_VERSION)
@@ -95,6 +97,8 @@ class AuditorKeyRotationTests(unittest.TestCase):
                 auditor_id=AUDITOR,
                 initial_public_key=self.p1,
                 transitions=(self.t1, skipped),
+                expected_generation=2,
+                expected_head_digest=skipped.transition_digest(),
             )
 
     def test_previous_transition_digest_break_is_rejected(self):
@@ -111,6 +115,8 @@ class AuditorKeyRotationTests(unittest.TestCase):
                 auditor_id=AUDITOR,
                 initial_public_key=self.p1,
                 transitions=(self.t1, broken),
+                expected_generation=2,
+                expected_head_digest=broken.transition_digest(),
             )
 
     def test_auditor_identity_substitution_is_rejected(self):
@@ -127,6 +133,8 @@ class AuditorKeyRotationTests(unittest.TestCase):
                 auditor_id=AUDITOR,
                 initial_public_key=self.p1,
                 transitions=(other,),
+                expected_generation=1,
+                expected_head_digest=other.transition_digest(),
             )
 
     def test_chain_cannot_substitute_untrusted_previous_key(self):
@@ -145,8 +153,45 @@ class AuditorKeyRotationTests(unittest.TestCase):
                 auditor_id=AUDITOR,
                 initial_public_key=self.p1,
                 transitions=(forged,),
+                expected_generation=1,
+                expected_head_digest=forged.transition_digest(),
             )
 
+    def test_stale_valid_prefix_is_rejected_by_pinned_head(self):
+        with self.assertRaises(AuditorKeyContinuityError):
+            verify_transition_chain(
+                auditor_id=AUDITOR,
+                initial_public_key=self.p1,
+                transitions=(self.t1,),
+                expected_generation=2,
+                expected_head_digest=self.t2.transition_digest(),
+            )
+
+    def test_boolean_generation_is_rejected_by_signer(self):
+        with self.assertRaises(ValueError):
+            AuditorKeyTransitionSigner.sign(
+                auditor_id=AUDITOR,
+                generation=True,
+                previous_private_key=self.k1,
+                next_private_key=self.k2,
+                previous_transition_digest=KEY_TRANSITION_GENESIS,
+                issued_at=T0 + 1,
+            )
+
+    def test_noncanonical_signature_encoding_is_rejected(self):
+        encoded = self.t1.previous_key_signature
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        index = alphabet.index(encoded[-3])
+        alternate = alphabet[(index & 0b110000) | ((index + 1) & 0b001111)]
+        self.assertNotEqual(alternate, encoded[-3])
+        noncanonical = encoded[:-3] + alternate + "=="
+        self.assertEqual(
+            base64.b64decode(noncanonical, validate=True),
+            base64.b64decode(encoded, validate=True),
+        )
+        forged = replace(self.t1, previous_key_signature=noncanonical)
+        with self.assertRaises(AuditorKeyTransitionSignatureInvalid):
+            verify_transition(forged)
     def test_unknown_field_is_rejected(self):
         raw = self.t1.to_dict()
         raw["verdict"] = "VERIFIED"
