@@ -320,10 +320,9 @@ class GovernanceAttestationSigner:
 def verify_governance_bundle(
     bundle: GovernanceWitnessBundle,
     *,
-    expected_policy_digest: str | None,
+    expected_policy_digest: str,
     expected_governance_generation: int,
     expected_governance_head_digest: str,
-    expected_policy_digests: tuple[str, ...] | None = None,
 ) -> GovernanceQuorumResult:
     # Direct dataclass construction is part of the exported API. Re-parse the
     # materialized bundle so verification enforces the exact same structural
@@ -441,9 +440,10 @@ def verify_governance_bundle(
 def verify_governance_history(
     bundles: tuple[GovernanceWitnessBundle, ...],
     *,
-    expected_policy_digest: str,
+    expected_policy_digest: str | None,
     expected_governance_generation: int,
     expected_governance_head_digest: str,
+    expected_policy_digests: tuple[str, ...] | None = None,
 ) -> GovernanceQuorumResult:
     """Verify append-only governance snapshot continuity through the pinned head."""
     if not bundles:
