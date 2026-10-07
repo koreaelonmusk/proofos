@@ -175,7 +175,7 @@ class GovernanceWitnessTests(unittest.TestCase):
                         bundle,
                         expected_policy_digest=self.policy.digest(),
                         expected_governance_generation=snapshot.governance_generation,
-                        expected_governance_head_digest=snapshot.snapshot_digest(),
+                        expected_governance_head_digest="0" * 64,
                     )
 
     def test_validly_signed_attestation_cannot_predate_snapshot(self):
