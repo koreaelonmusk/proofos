@@ -324,6 +324,24 @@ def verify_governance_bundle(
     expected_governance_generation: int,
     expected_governance_head_digest: str,
 ) -> GovernanceQuorumResult:
+    if bundle.version != GOVERNANCE_SNAPSHOT_VERSION:
+        raise GovernanceBindingError(
+            f"unsupported governance bundle version {bundle.version!r}"
+        )
+    if bundle.snapshot.version != GOVERNANCE_SNAPSHOT_VERSION:
+        raise GovernanceBindingError(
+            f"unsupported governance snapshot version {bundle.snapshot.version!r}"
+        )
+    for attestation in bundle.attestations:
+        if attestation.version != GOVERNANCE_ATTESTATION_VERSION:
+            raise GovernanceBindingError(
+                f"unsupported governance attestation version {attestation.version!r}"
+            )
+        if attestation.observed_at < bundle.snapshot.issued_at:
+            raise GovernanceBindingError(
+                "governance attestation predates the governance snapshot"
+            )
+
     policy_digest = bundle.policy.digest()
     if policy_digest != expected_policy_digest:
         raise GovernanceBindingError(
