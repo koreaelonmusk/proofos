@@ -7,6 +7,7 @@ is attempted. It intentionally avoids network access and secret material.
 from __future__ import annotations
 
 import importlib
+import json
 from pathlib import Path
 import sys
 import tomllib
@@ -97,9 +98,19 @@ def validate() -> list[str]:
     if missing_routes:
         issues.append("missing_required_routes:" + ",".join(missing_routes))
 
-    conflicting = ROOT / "vercel.json"
-    if conflicting.exists():
-        issues.append("unexpected_vercel_json_present")
+    vercel_json = ROOT / "vercel.json"
+    if vercel_json.exists():
+        try:
+            config = json.loads(vercel_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            issues.append("vercel_json_invalid")
+        else:
+            allowed = {
+                "$schema": "https://openapi.vercel.sh/vercel.json",
+                "git": {"deploymentEnabled": False},
+            }
+            if config != allowed:
+                issues.append("vercel_json_contract_drift")
 
     sample_env = {
         "VERCEL": "1",
@@ -141,7 +152,7 @@ def main() -> int:
     print("- runtime: Python >=3.12")
     print("- collector dependency boundary: OK")
     print("- required FastAPI routes: OK")
-    print("- conflicting vercel.json: absent")
+    print("- vercel.json Git auto-deployment lock: OK")
     print("- public runtime provenance allowlist: OK")
     return 0
 
