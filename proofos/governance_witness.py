@@ -320,9 +320,10 @@ class GovernanceAttestationSigner:
 def verify_governance_bundle(
     bundle: GovernanceWitnessBundle,
     *,
-    expected_policy_digest: str,
+    expected_policy_digest: str | None,
     expected_governance_generation: int,
     expected_governance_head_digest: str,
+    expected_policy_digests: tuple[str, ...] | None = None,
 ) -> GovernanceQuorumResult:
     # Direct dataclass construction is part of the exported API. Re-parse the
     # materialized bundle so verification enforces the exact same structural
@@ -462,6 +463,16 @@ def verify_governance_history(
             f"governance history rollback or truncation: expected generation "
             f"{expected_governance_generation}, verified {len(bundles)}"
         )
+    if expected_policy_digests is not None:
+        if len(expected_policy_digests) != len(bundles):
+            raise GovernanceBindingError(
+                "governance witness policy schedule length does not match "
+                "governance history"
+            )
+    elif expected_policy_digest is None:
+        raise GovernanceBindingError(
+            "governance witness policy digest or schedule is required"
+        )
 
     previous_digest = GOVERNANCE_GENESIS
     final_result: GovernanceQuorumResult | None = None
@@ -489,9 +500,15 @@ def verify_governance_history(
                 "the previous snapshot digest"
             )
 
+        policy_digest = (
+            expected_policy_digests[generation - 1]
+            if expected_policy_digests is not None
+            else expected_policy_digest
+        )
+        assert policy_digest is not None
         result = verify_governance_bundle(
             bundle,
-            expected_policy_digest=expected_policy_digest,
+            expected_policy_digest=policy_digest,
             expected_governance_generation=generation,
             expected_governance_head_digest=snapshot.snapshot_digest(),
         )
