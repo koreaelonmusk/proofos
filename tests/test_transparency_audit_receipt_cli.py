@@ -11,6 +11,10 @@ from unittest import mock
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from proofos.auditor_key_recovery import (
+    AuditorKeyRecoverySigner,
+    RecoveryPolicy,
+)
 from proofos.auditor_key_rotation import (
     KEY_TRANSITION_GENESIS,
     AuditorKeyTransitionSigner,
@@ -65,6 +69,7 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         self.key_path = root / "auditor.pem"
         self.receipt_path = root / "receipt.json"
         self.transitions_path = root / "auditor-transitions.json"
+        self.recovery_policy_path = root / "auditor-recovery-policy.json"
 
         self.gossip_path.write_text(
             json.dumps(self.bundle.to_dict()),
@@ -235,6 +240,137 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         report = json.loads(result.stdout)
         self.assertFalse(report["valid"])
         self.assertIn("rollback", report["detail"])
+    def test_public_verifier_accepts_threshold_emergency_recovery(self):
+        recovery_a = Ed25519PrivateKey.generate()
+        recovery_b = Ed25519PrivateKey.generate()
+        recovery_c = Ed25519PrivateKey.generate()
+        policy = RecoveryPolicy(
+            "auditor-recovery-v1",
+            (
+                ("recovery-a", encode_public_key(recovery_a.public_key())),
+                ("recovery-b", encode_public_key(recovery_b.public_key())),
+                ("recovery-c", encode_public_key(recovery_c.public_key())),
+            ),
+            2,
+        )
+        replacement = Ed25519PrivateKey.generate()
+        recovery = AuditorKeyRecoverySigner.sign(
+            auditor_id="external-auditor-v1",
+            generation=1,
+            compromised_public_key=self.auditor_initial_public_key,
+            replacement_private_key=replacement,
+            previous_history_digest=KEY_TRANSITION_GENESIS,
+            incident_id="INC-CLI-001",
+            policy=policy,
+            authority_private_keys={
+                "recovery-a": recovery_a,
+                "recovery-b": recovery_b,
+            },
+            issued_at=T0 + 90,
+        )
+        self.transitions_path.write_text(
+            json.dumps([recovery.to_dict()]),
+            encoding="utf-8",
+        )
+        self.recovery_policy_path.write_text(
+            json.dumps(policy.to_dict()),
+            encoding="utf-8",
+        )
+        self.key_path.write_bytes(
+            replacement.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+        self.auditor_public_key = encode_public_key(replacement.public_key())
+        self.create_receipt()
+
+        cmd = self.verify_cmd()
+        gen_index = cmd.index("--expected-auditor-generation") + 1
+        digest_index = cmd.index("--expected-auditor-transition-digest") + 1
+        cmd[gen_index] = "1"
+        cmd[digest_index] = recovery.recovery_digest()
+        cmd.extend(
+            [
+                "--auditor-recovery-policy",
+                str(self.recovery_policy_path),
+                "--expected-auditor-recovery-policy-digest",
+                policy.digest(),
+            ]
+        )
+        result = subprocess.run(
+            cmd,
+            cwd=self.outside,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["auditor_key_generation"], 1)
+        self.assertEqual(
+            report["auditor_recovery_policy_digest"],
+            policy.digest(),
+        )
+
+    def test_public_verifier_rejects_recovery_without_pinned_policy(self):
+        recovery_a = Ed25519PrivateKey.generate()
+        recovery_b = Ed25519PrivateKey.generate()
+        policy = RecoveryPolicy(
+            "auditor-recovery-v1",
+            (
+                ("recovery-a", encode_public_key(recovery_a.public_key())),
+                ("recovery-b", encode_public_key(recovery_b.public_key())),
+            ),
+            2,
+        )
+        replacement = Ed25519PrivateKey.generate()
+        recovery = AuditorKeyRecoverySigner.sign(
+            auditor_id="external-auditor-v1",
+            generation=1,
+            compromised_public_key=self.auditor_initial_public_key,
+            replacement_private_key=replacement,
+            previous_history_digest=KEY_TRANSITION_GENESIS,
+            incident_id="INC-CLI-002",
+            policy=policy,
+            authority_private_keys={
+                "recovery-a": recovery_a,
+                "recovery-b": recovery_b,
+            },
+            issued_at=T0 + 90,
+        )
+        self.transitions_path.write_text(
+            json.dumps([recovery.to_dict()]),
+            encoding="utf-8",
+        )
+        self.key_path.write_bytes(
+            replacement.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+        self.create_receipt()
+
+        cmd = self.verify_cmd()
+        gen_index = cmd.index("--expected-auditor-generation") + 1
+        digest_index = cmd.index("--expected-auditor-transition-digest") + 1
+        cmd[gen_index] = "1"
+        cmd[digest_index] = recovery.recovery_digest()
+        result = subprocess.run(
+            cmd,
+            cwd=self.outside,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 2)
+        report = json.loads(result.stdout)
+        self.assertFalse(report["valid"])
+        self.assertIn("recovery policy", report["detail"])
+
     def test_signer_refuses_to_overwrite_existing_receipt(self):
         self.create_receipt()
         second = subprocess.run(
@@ -317,6 +453,8 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         self.assertIn("--auditor-initial-public-key", result.stdout)
         self.assertIn("--auditor-key-transitions", result.stdout)
         self.assertIn("--expected-auditor-generation", result.stdout)
+        self.assertIn("--auditor-recovery-policy", result.stdout)
+        self.assertIn("--expected-auditor-recovery-policy-digest", result.stdout)
 
 
 if __name__ == "__main__":
