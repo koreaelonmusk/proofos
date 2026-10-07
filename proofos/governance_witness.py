@@ -421,6 +421,82 @@ def verify_governance_bundle(
     )
 
 
+
+def verify_governance_history(
+    bundles: tuple[GovernanceWitnessBundle, ...],
+    *,
+    expected_policy_digest: str,
+    expected_governance_generation: int,
+    expected_governance_head_digest: str,
+) -> GovernanceQuorumResult:
+    """Verify append-only governance snapshot continuity through the pinned head."""
+    if not bundles:
+        raise GovernanceBindingError("governance history must not be empty")
+    if isinstance(expected_governance_generation, bool) or not isinstance(
+        expected_governance_generation, int
+    ):
+        raise GovernanceBindingError(
+            "expected_governance_generation must be an integer"
+        )
+    if expected_governance_generation < 1:
+        raise GovernanceBindingError(
+            "expected_governance_generation must be >= 1"
+        )
+    if len(bundles) != expected_governance_generation:
+        raise GovernanceBindingError(
+            f"governance history rollback or truncation: expected generation "
+            f"{expected_governance_generation}, verified {len(bundles)}"
+        )
+
+    previous_digest = GOVERNANCE_GENESIS
+    final_result: GovernanceQuorumResult | None = None
+    for generation, bundle in enumerate(bundles, start=1):
+        snapshot = bundle.snapshot
+        if snapshot.governance_generation != generation:
+            raise GovernanceBindingError(
+                f"expected governance generation {generation}, "
+                f"got {snapshot.governance_generation}"
+            )
+        if snapshot.previous_snapshot_digest != previous_digest:
+            raise GovernanceBindingError(
+                f"governance generation {generation} does not follow "
+                "the previous snapshot digest"
+            )
+
+        result = verify_governance_bundle(
+            bundle,
+            expected_policy_digest=expected_policy_digest,
+            expected_governance_generation=generation,
+            expected_governance_head_digest=snapshot.snapshot_digest(),
+        )
+        if result.state is not GovernanceQuorumState.QUORUM:
+            raise GovernanceBindingError(
+                f"governance generation {generation} witness quorum is "
+                f"{result.state}"
+            )
+        previous_digest = snapshot.snapshot_digest()
+        final_result = result
+
+    if previous_digest != expected_governance_head_digest:
+        raise GovernanceBindingError(
+            "governance history head digest does not match external pin"
+        )
+    assert final_result is not None
+    return final_result
+
+
+def parse_governance_history(
+    data: Any,
+) -> tuple[GovernanceWitnessBundle, ...]:
+    """Parse one legacy bundle object or an explicit ordered bundle array."""
+    if isinstance(data, Mapping):
+        return (GovernanceWitnessBundle.from_dict(data),)
+    if not isinstance(data, list):
+        raise MalformedGovernanceSnapshot(
+            "governance history must be a bundle object or JSON array"
+        )
+    return tuple(GovernanceWitnessBundle.from_dict(item) for item in data)
+
 def _verify_attestation_signature(
     key: Ed25519PublicKey,
     attestation: GovernanceAttestation,
@@ -568,5 +644,7 @@ __all__ = [
     "GovernanceSnapshot",
     "GovernanceWitnessBundle",
     "MalformedGovernanceSnapshot",
+    "parse_governance_history",
     "verify_governance_bundle",
+    "verify_governance_history",
 ]

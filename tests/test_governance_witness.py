@@ -14,7 +14,9 @@ from proofos.governance_witness import (
     GovernanceSnapshot,
     GovernanceWitnessBundle,
     MalformedGovernanceSnapshot,
+    parse_governance_history,
     verify_governance_bundle,
+    verify_governance_history,
 )
 from proofos.recovery_authority_revocation import REVOCATION_GENESIS
 from proofos.recovery_policy_rotation import RECOVERY_POLICY_TRANSITION_GENESIS
@@ -182,6 +184,81 @@ class GovernanceWitnessTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(GovernanceBindingError, "predates"):
             self.verify(bundle)
+
+    def second_bundle(self):
+        second = replace(
+            self.snapshot,
+            governance_generation=2,
+            previous_snapshot_digest=self.snapshot.snapshot_digest(),
+            auditor_history_generation=1,
+            auditor_history_digest="d" * 64,
+            issued_at=T0 + 3,
+        )
+        return GovernanceWitnessBundle(
+            version=GOVERNANCE_SNAPSHOT_VERSION,
+            snapshot=second,
+            policy=self.policy,
+            attestations=tuple(
+                self.signers[wid].sign(second, observed_at=T0 + 4)
+                for wid in ("a", "b")
+            ),
+        )
+
+    def test_two_generation_governance_history_verifies(self):
+        second = self.second_bundle()
+        result = verify_governance_history(
+            (self.bundle(), second),
+            expected_policy_digest=self.policy.digest(),
+            expected_governance_generation=2,
+            expected_governance_head_digest=second.snapshot.snapshot_digest(),
+        )
+        self.assertEqual(result.state, GovernanceQuorumState.QUORUM)
+        self.assertEqual(result.snapshot_digest, second.snapshot.snapshot_digest())
+
+    def test_governance_history_rejects_broken_previous_digest(self):
+        second = self.second_bundle()
+        broken_snapshot = replace(
+            second.snapshot,
+            previous_snapshot_digest="f" * 64,
+        )
+        broken = GovernanceWitnessBundle(
+            version=GOVERNANCE_SNAPSHOT_VERSION,
+            snapshot=broken_snapshot,
+            policy=self.policy,
+            attestations=tuple(
+                self.signers[wid].sign(broken_snapshot, observed_at=T0 + 4)
+                for wid in ("a", "b")
+            ),
+        )
+        with self.assertRaisesRegex(GovernanceBindingError, "previous snapshot"):
+            verify_governance_history(
+                (self.bundle(), broken),
+                expected_policy_digest=self.policy.digest(),
+                expected_governance_generation=2,
+                expected_governance_head_digest=broken_snapshot.snapshot_digest(),
+            )
+
+    def test_governance_history_rejects_stale_valid_prefix(self):
+        second = self.second_bundle()
+        with self.assertRaisesRegex(GovernanceBindingError, "rollback|truncation"):
+            verify_governance_history(
+                (self.bundle(),),
+                expected_policy_digest=self.policy.digest(),
+                expected_governance_generation=2,
+                expected_governance_head_digest=second.snapshot.snapshot_digest(),
+            )
+
+    def test_governance_history_parser_preserves_legacy_object_and_array(self):
+        first = self.bundle()
+        second = self.second_bundle()
+        legacy = parse_governance_history(first.to_dict())
+        history = parse_governance_history([first.to_dict(), second.to_dict()])
+        self.assertEqual(len(legacy), 1)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(
+            history[-1].snapshot.snapshot_digest(),
+            second.snapshot.snapshot_digest(),
+        )
 
     def test_unknown_authority_field_is_rejected(self):
         raw = self.bundle().to_dict()
