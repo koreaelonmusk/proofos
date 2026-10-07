@@ -19,6 +19,11 @@ from proofos.auditor_key_recovery import (  # noqa: E402
     parse_auditor_key_history,
     verify_auditor_key_history,
 )
+from proofos.recovery_authority_revocation import (  # noqa: E402
+    REVOCATION_GENESIS,
+    parse_revocation_registry,
+    verify_revocation_registry,
+)
 from proofos.recovery_policy_rotation import (  # noqa: E402
     RECOVERY_POLICY_TRANSITION_GENESIS,
     parse_recovery_policy_history,
@@ -69,6 +74,9 @@ def main() -> int:
     )
     parser.add_argument("--expected-auditor-recovery-policy-history-digest")
     parser.add_argument("--expected-auditor-recovery-policy-digest")
+    parser.add_argument("--auditor-recovery-revocations", type=Path)
+    parser.add_argument("--expected-auditor-revocation-generation", type=int)
+    parser.add_argument("--expected-auditor-revocation-head-digest")
     parser.add_argument("--auditor-id", required=True)
     args = parser.parse_args()
 
@@ -159,6 +167,37 @@ def main() -> int:
             recovery_policy_generation = 0
             recovery_policy_history_digest = RECOVERY_POLICY_TRANSITION_GENESIS
 
+        revoked_authorities = None
+        revocation_generation = None
+        revocation_head_digest = None
+        revocation_args = (
+            args.auditor_recovery_revocations,
+            args.expected_auditor_revocation_generation,
+            args.expected_auditor_revocation_head_digest,
+        )
+        if any(value is not None for value in revocation_args):
+            if recovery_policy is None:
+                raise ValueError(
+                    "recovery authority revocations require an active recovery policy"
+                )
+            if args.auditor_recovery_revocations is None:
+                raise ValueError("recovery authority revocation registry is required")
+            if args.expected_auditor_revocation_generation is None:
+                raise ValueError("expected revocation generation is required")
+            if args.expected_auditor_revocation_head_digest is None:
+                raise ValueError("expected revocation head digest is required")
+            revocations = parse_revocation_registry(
+                _read_json(args.auditor_recovery_revocations)
+            )
+            revoked_authorities = verify_revocation_registry(
+                policy=recovery_policy,
+                revocations=revocations,
+                expected_generation=args.expected_auditor_revocation_generation,
+                expected_head_digest=args.expected_auditor_revocation_head_digest,
+            )
+            revocation_generation = args.expected_auditor_revocation_generation
+            revocation_head_digest = args.expected_auditor_revocation_head_digest
+
         trusted_auditor_key = verify_auditor_key_history(
             auditor_id=args.auditor_id,
             initial_public_key=args.auditor_initial_public_key,
@@ -169,6 +208,7 @@ def main() -> int:
             expected_recovery_policy_digest=(
                 recovery_policy.digest() if recovery_policy is not None else None
             ),
+            revoked_authorities=revoked_authorities,
         )
         verifier = TransparencyAuditReceiptVerifier.from_b64(
             trusted_auditor_key,
@@ -198,6 +238,8 @@ def main() -> int:
                 "auditor_recovery_policy_history_digest": (
                     recovery_policy_history_digest
                 ),
+                "auditor_recovery_revocation_generation": revocation_generation,
+                "auditor_recovery_revocation_head_digest": revocation_head_digest,
                 "transparency_state": receipt.transparency_state,
                 "audit_result_digest": receipt.audit_result_digest,
                 "checkpoint_digest": receipt.checkpoint_digest,
@@ -208,6 +250,7 @@ def main() -> int:
                     "derives recovery authority from a pinned initial policy and verified policy history",
                     "requires old-policy and new-policy threshold approval for recovery-policy rotation",
                     "requires pinned N-of-M recovery authority for emergency recovery entries",
+                    "rejects recovery approvals from authorities revoked for that auditor generation",
                     "requires no private key or network access",
                     "does not decide task completion or grant execution authority",
                 ],
