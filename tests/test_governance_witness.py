@@ -180,6 +180,30 @@ class GovernanceWitnessTests(unittest.TestCase):
                         expected_governance_head_digest="0" * 64,
                     )
 
+    def test_exported_verifier_rejects_malformed_materialized_object_graphs(self):
+        malformed_bundles = (
+            replace(self.bundle(), policy=None),
+            replace(self.bundle(), snapshot=None),
+            replace(self.bundle(), attestations=(object(),)),
+        )
+        for bundle in malformed_bundles:
+            with self.subTest(bundle=bundle):
+                with self.assertRaises(GovernanceBindingError):
+                    verify_governance_bundle(
+                        bundle,
+                        expected_policy_digest=self.policy.digest(),
+                        expected_governance_generation=1,
+                        expected_governance_head_digest="0" * 64,
+                    )
+
+        with self.assertRaises(GovernanceBindingError):
+            verify_governance_bundle(
+                object(),
+                expected_policy_digest=self.policy.digest(),
+                expected_governance_generation=1,
+                expected_governance_head_digest="0" * 64,
+            )
+
     def test_validly_signed_attestation_cannot_predate_snapshot(self):
         attestation = self.signers["a"].sign(
             self.snapshot,
