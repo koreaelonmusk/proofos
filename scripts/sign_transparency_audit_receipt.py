@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
@@ -45,23 +46,51 @@ def _load_private_key(path: Path) -> Ed25519PrivateKey:
     return key
 
 
+def _fsync_directory(path: Path) -> None:
+    if not hasattr(os, "O_DIRECTORY"):
+        return
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _write_create_only(path: Path, payload: dict) -> None:
+    """Durably publish one immutable receipt without exposing partial content."""
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         + "\n"
     ).encode("utf-8")
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError as exc:
-        raise ValueError(f"refusing to overwrite existing receipt {path}") from exc
+
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-    except Exception:
-        raise
+
+        # Hard-link publication is atomic and create-only: if the destination
+        # already exists, os.link fails without replacing it. The final path is
+        # therefore never visible with partial bytes.
+        try:
+            os.link(tmp, path)
+        except FileExistsError as exc:
+            raise ValueError(
+                f"refusing to overwrite existing receipt {path}"
+            ) from exc
+        _fsync_directory(path.parent)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def main() -> int:
