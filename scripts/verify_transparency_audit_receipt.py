@@ -143,7 +143,7 @@ def main() -> int:
                     _read_json(args.governance_witness_policy_history)
                 )
             )
-            active_governance_policy, _ = verify_governance_witness_policy_chain(
+            verify_governance_witness_policy_chain(
                 initial_policy=initial_governance_policy,
                 transitions=governance_policy_transitions,
                 expected_generation=(
@@ -152,6 +152,11 @@ def main() -> int:
                 expected_head_digest=(
                     args.expected_governance_witness_policy_history_digest
                 ),
+            )
+            active_governance_policy = policy_for_governance_generation(
+                initial_governance_policy,
+                governance_policy_transitions,
+                args.expected_governance_generation,
             )
             if (
                 active_governance_policy.digest()
