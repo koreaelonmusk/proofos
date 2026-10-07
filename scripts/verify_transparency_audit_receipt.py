@@ -67,11 +67,8 @@ def main() -> int:
     parser.add_argument(
         "--expected-auditor-recovery-policy-generation", type=int
     )
-    parser.add_argument(
-        "--expected-auditor-recovery-policy-history-digest",
-        "--expected-auditor-recovery-policy-digest",
-        dest="expected_auditor_recovery_policy_history_digest",
-    )
+    parser.add_argument("--expected-auditor-recovery-policy-history-digest")
+    parser.add_argument("--expected-auditor-recovery-policy-digest")
     parser.add_argument("--auditor-id", required=True)
     args = parser.parse_args()
 
@@ -92,13 +89,24 @@ def main() -> int:
         recovery_policy = None
         recovery_policy_generation = None
         recovery_policy_history_digest = None
-        recovery_policy_args = (
-            args.auditor_recovery_initial_policy,
-            args.auditor_recovery_policy_history,
-            args.expected_auditor_recovery_policy_generation,
-            args.expected_auditor_recovery_policy_history_digest,
+
+        continuity_requested = any(
+            value is not None
+            for value in (
+                args.auditor_recovery_policy_history,
+                args.expected_auditor_recovery_policy_generation,
+                args.expected_auditor_recovery_policy_history_digest,
+            )
         )
-        if any(value is not None for value in recovery_policy_args):
+        static_policy_requested = any(
+            value is not None
+            for value in (
+                args.auditor_recovery_initial_policy,
+                args.expected_auditor_recovery_policy_digest,
+            )
+        )
+
+        if continuity_requested:
             if args.auditor_recovery_initial_policy is None:
                 raise ValueError("initial recovery policy is required")
             if args.auditor_recovery_policy_history is None:
@@ -128,6 +136,29 @@ def main() -> int:
             recovery_policy_history_digest = (
                 args.expected_auditor_recovery_policy_history_digest
             )
+            if (
+                args.expected_auditor_recovery_policy_digest is not None
+                and recovery_policy.digest()
+                != args.expected_auditor_recovery_policy_digest
+            ):
+                raise ValueError(
+                    "active recovery policy digest does not match external pin"
+                )
+        elif static_policy_requested:
+            if args.auditor_recovery_initial_policy is None:
+                raise ValueError("recovery policy is required")
+            if args.expected_auditor_recovery_policy_digest is None:
+                raise ValueError("expected recovery-policy digest is required")
+            recovery_policy = RecoveryPolicy.from_dict(
+                _read_json(args.auditor_recovery_initial_policy)
+            )
+            if recovery_policy.digest() != args.expected_auditor_recovery_policy_digest:
+                raise ValueError(
+                    "recovery policy digest does not match external pin"
+                )
+            recovery_policy_generation = 0
+            recovery_policy_history_digest = RECOVERY_POLICY_TRANSITION_GENESIS
+
         trusted_auditor_key = verify_auditor_key_history(
             auditor_id=args.auditor_id,
             initial_public_key=args.auditor_initial_public_key,
