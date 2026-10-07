@@ -21,6 +21,10 @@ from proofos.auditor_key_rotation import (
 )
 from proofos.keys import encode_public_key
 from proofos.quorum_certificate import QuorumCertificateSigner
+from proofos.recovery_authority_revocation import (
+    REVOCATION_GENESIS,
+    RecoveryAuthorityRevocationSigner,
+)
 from proofos.recovery_policy_rotation import (
     RECOVERY_POLICY_TRANSITION_GENESIS,
     RecoveryPolicyTransitionSigner,
@@ -544,6 +548,196 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         self.assertFalse(report["valid"])
         self.assertIn("rollback", report["detail"])
 
+    def test_public_verifier_rejects_recovery_signed_by_revoked_authority(self):
+        recovery_a = Ed25519PrivateKey.generate()
+        recovery_b = Ed25519PrivateKey.generate()
+        recovery_c = Ed25519PrivateKey.generate()
+        policy = RecoveryPolicy(
+            "auditor-recovery-v1",
+            (
+                ("recovery-a", encode_public_key(recovery_a.public_key())),
+                ("recovery-b", encode_public_key(recovery_b.public_key())),
+                ("recovery-c", encode_public_key(recovery_c.public_key())),
+            ),
+            2,
+        )
+        replacement = Ed25519PrivateKey.generate()
+        recovery = AuditorKeyRecoverySigner.sign(
+            auditor_id="external-auditor-v1",
+            generation=1,
+            compromised_public_key=self.auditor_initial_public_key,
+            replacement_private_key=replacement,
+            previous_history_digest=KEY_TRANSITION_GENESIS,
+            incident_id="INC-CLI-REV-001",
+            policy=policy,
+            authority_private_keys={
+                "recovery-a": recovery_a,
+                "recovery-b": recovery_b,
+            },
+            issued_at=T0 + 100,
+        )
+        revocation = RecoveryAuthorityRevocationSigner.sign(
+            revocation_generation=1,
+            policy=policy,
+            authority_id="recovery-a",
+            effective_from_auditor_generation=1,
+            incident_id="INC-AUTH-REVOKE-001",
+            authority_private_keys={
+                "recovery-b": recovery_b,
+                "recovery-c": recovery_c,
+            },
+            previous_revocation_digest=REVOCATION_GENESIS,
+            issued_at=T0 + 99,
+        )
+
+        revocations_path = pathlib.Path(self.tmp.name) / "revocations.json"
+        self.recovery_policy_path.write_text(
+            json.dumps(policy.to_dict()),
+            encoding="utf-8",
+        )
+        revocations_path.write_text(
+            json.dumps([revocation.to_dict()]),
+            encoding="utf-8",
+        )
+        self.transitions_path.write_text(
+            json.dumps([recovery.to_dict()]),
+            encoding="utf-8",
+        )
+        self.key_path.write_bytes(
+            replacement.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+        self.create_receipt()
+
+        cmd = self.verify_cmd()
+        cmd[cmd.index("--expected-auditor-generation") + 1] = "1"
+        cmd[cmd.index("--expected-auditor-transition-digest") + 1] = (
+            recovery.recovery_digest()
+        )
+        cmd.extend(
+            [
+                "--auditor-recovery-policy",
+                str(self.recovery_policy_path),
+                "--expected-auditor-recovery-policy-digest",
+                policy.digest(),
+                "--auditor-recovery-revocations",
+                str(revocations_path),
+                "--expected-auditor-revocation-generation",
+                "1",
+                "--expected-auditor-revocation-head-digest",
+                revocation.revocation_digest(),
+            ]
+        )
+        result = subprocess.run(
+            cmd,
+            cwd=self.outside,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 2)
+        report = json.loads(result.stdout)
+        self.assertFalse(report["valid"])
+        self.assertIn("revoked", report["detail"])
+
+    def test_public_verifier_preserves_pre_revocation_recovery(self):
+        recovery_a = Ed25519PrivateKey.generate()
+        recovery_b = Ed25519PrivateKey.generate()
+        recovery_c = Ed25519PrivateKey.generate()
+        policy = RecoveryPolicy(
+            "auditor-recovery-v1",
+            (
+                ("recovery-a", encode_public_key(recovery_a.public_key())),
+                ("recovery-b", encode_public_key(recovery_b.public_key())),
+                ("recovery-c", encode_public_key(recovery_c.public_key())),
+            ),
+            2,
+        )
+        replacement = Ed25519PrivateKey.generate()
+        recovery = AuditorKeyRecoverySigner.sign(
+            auditor_id="external-auditor-v1",
+            generation=1,
+            compromised_public_key=self.auditor_initial_public_key,
+            replacement_private_key=replacement,
+            previous_history_digest=KEY_TRANSITION_GENESIS,
+            incident_id="INC-CLI-REV-002",
+            policy=policy,
+            authority_private_keys={
+                "recovery-a": recovery_a,
+                "recovery-b": recovery_b,
+            },
+            issued_at=T0 + 100,
+        )
+        revocation = RecoveryAuthorityRevocationSigner.sign(
+            revocation_generation=1,
+            policy=policy,
+            authority_id="recovery-a",
+            effective_from_auditor_generation=2,
+            incident_id="INC-AUTH-REVOKE-002",
+            authority_private_keys={
+                "recovery-b": recovery_b,
+                "recovery-c": recovery_c,
+            },
+            previous_revocation_digest=REVOCATION_GENESIS,
+            issued_at=T0 + 101,
+        )
+
+        revocations_path = pathlib.Path(self.tmp.name) / "revocations.json"
+        self.recovery_policy_path.write_text(
+            json.dumps(policy.to_dict()),
+            encoding="utf-8",
+        )
+        revocations_path.write_text(
+            json.dumps([revocation.to_dict()]),
+            encoding="utf-8",
+        )
+        self.transitions_path.write_text(
+            json.dumps([recovery.to_dict()]),
+            encoding="utf-8",
+        )
+        self.key_path.write_bytes(
+            replacement.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+        self.create_receipt()
+
+        cmd = self.verify_cmd()
+        cmd[cmd.index("--expected-auditor-generation") + 1] = "1"
+        cmd[cmd.index("--expected-auditor-transition-digest") + 1] = (
+            recovery.recovery_digest()
+        )
+        cmd.extend(
+            [
+                "--auditor-recovery-policy",
+                str(self.recovery_policy_path),
+                "--expected-auditor-recovery-policy-digest",
+                policy.digest(),
+                "--auditor-recovery-revocations",
+                str(revocations_path),
+                "--expected-auditor-revocation-generation",
+                "1",
+                "--expected-auditor-revocation-head-digest",
+                revocation.revocation_digest(),
+            ]
+        )
+        result = subprocess.run(
+            cmd,
+            cwd=self.outside,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["auditor_recovery_revocation_generation"], 1)
+
     def test_signer_refuses_to_overwrite_existing_receipt(self):
         self.create_receipt()
         second = subprocess.run(
@@ -634,6 +828,9 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             "--expected-auditor-recovery-policy-history-digest",
             result.stdout,
         )
+        self.assertIn("--auditor-recovery-revocations", result.stdout)
+        self.assertIn("--expected-auditor-revocation-generation", result.stdout)
+        self.assertIn("--expected-auditor-revocation-head-digest", result.stdout)
 
 
 if __name__ == "__main__":
