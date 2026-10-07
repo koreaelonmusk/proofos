@@ -44,7 +44,7 @@ def _read_json(path: Path) -> Any:
         ) from exc
 
 
-def audit(
+def evaluate_artifacts(
     *,
     gossip_path: Path,
     gossip_public_key: str,
@@ -53,7 +53,12 @@ def audit(
     certificate_path: Path | None = None,
     certificate_public_key: str | None = None,
     certificate_signer_id: str | None = None,
-) -> dict[str, Any]:
+):
+    """Return the recomputed result and parsed source artifacts.
+
+    This is shared by the public audit CLI and the separate receipt
+    signer/verifier CLIs so every surface uses one verification path.
+    """
     bundle = WitnessGossipBundle.from_dict(_read_json(gossip_path))
     gossip_verifier = WitnessGossipVerifier.from_b64(
         gossip_public_key,
@@ -83,6 +88,28 @@ def audit(
         expected_policy_digest=expected_policy_digest,
         certificate=certificate,
         certificate_verifier=certificate_verifier,
+    )
+    return result, bundle, certificate
+
+
+def audit(
+    *,
+    gossip_path: Path,
+    gossip_public_key: str,
+    gossip_publisher_id: str,
+    expected_policy_digest: str,
+    certificate_path: Path | None = None,
+    certificate_public_key: str | None = None,
+    certificate_signer_id: str | None = None,
+) -> dict[str, Any]:
+    result, _, _ = evaluate_artifacts(
+        gossip_path=gossip_path,
+        gossip_public_key=gossip_public_key,
+        gossip_publisher_id=gossip_publisher_id,
+        expected_policy_digest=expected_policy_digest,
+        certificate_path=certificate_path,
+        certificate_public_key=certificate_public_key,
+        certificate_signer_id=certificate_signer_id,
     )
     return {
         "valid": True,
