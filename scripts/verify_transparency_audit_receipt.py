@@ -20,9 +20,8 @@ from proofos.auditor_key_recovery import (  # noqa: E402
     verify_auditor_key_history,
 )
 from proofos.governance_witness import (  # noqa: E402
-    GovernanceQuorumState,
-    GovernanceWitnessBundle,
-    verify_governance_bundle,
+    parse_governance_history,
+    verify_governance_history,
 )
 from proofos.recovery_authority_revocation import (  # noqa: E402
     REVOCATION_GENESIS,
@@ -100,20 +99,16 @@ def main() -> int:
             certificate_signer_id=args.certificate_signer_id,
         )
         receipt = TransparencyAuditReceipt.from_dict(_read_json(args.receipt))
-        governance_bundle = GovernanceWitnessBundle.from_dict(
+        governance_history = parse_governance_history(
             _read_json(args.governance_witness_bundle)
         )
-        governance_quorum = verify_governance_bundle(
-            governance_bundle,
+        governance_quorum = verify_governance_history(
+            governance_history,
             expected_policy_digest=args.expected_governance_witness_policy_digest,
             expected_governance_generation=args.expected_governance_generation,
             expected_governance_head_digest=args.expected_governance_head_digest,
         )
-        if governance_quorum.state is not GovernanceQuorumState.QUORUM:
-            raise ValueError(
-                f"governance witness quorum is {governance_quorum.state}"
-            )
-        governance = governance_bundle.snapshot
+        governance = governance_history[-1].snapshot
         if governance.auditor_history_generation != args.expected_auditor_generation:
             raise ValueError("auditor generation disagrees with governance snapshot")
         if governance.auditor_history_digest != args.expected_auditor_history_digest:
@@ -324,7 +319,8 @@ def main() -> int:
                 "audit_result_digest": receipt.audit_result_digest,
                 "checkpoint_digest": receipt.checkpoint_digest,
                 "claim_boundary": [
-                    "requires N-of-M witnesses to attest the current governance heads",
+                    "requires N-of-M witnesses to attest every governance snapshot in the pinned history",
+                    "requires append-only governance snapshot continuity through the externally pinned head",
                     "verifies receipt signature and source-artifact binding",
                     "recomputes transparency from pinned public inputs",
                     "derives the active auditor key from a pinned initial key and verified key history",
