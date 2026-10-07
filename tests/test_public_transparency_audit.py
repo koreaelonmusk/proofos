@@ -119,6 +119,37 @@ class PublicTransparencyAuditTests(unittest.TestCase):
         self.assertTrue(report["accepted"])
         self.assertNotIn("verdict", report)
 
+    def test_cli_runs_from_outside_repository_root(self):
+        cmd = [
+            sys.executable,
+            str(SCRIPTS / "audit_transparency.py"),
+            str(self.gossip_path),
+            "--gossip-public-key",
+            self.gossip_signer.public_key_b64(),
+            "--gossip-publisher-id",
+            "gossip-publisher-v1",
+            "--expected-policy-digest",
+            self.policy.digest(),
+            "--certificate",
+            str(self.cert_path),
+            "--certificate-public-key",
+            self.cert_signer.public_key_b64(),
+            "--certificate-signer-id",
+            "quorum-aggregator-v1",
+        ]
+        outside = pathlib.Path(self.tmp.name) / "outside"
+        outside.mkdir()
+        result = subprocess.run(
+            cmd,
+            cwd=outside,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["accepted"])
+
     def test_cli_fails_closed_on_tampered_gossip(self):
         forged = replace(self.bundle, checkpoint_digest="f" * 64)
         self.gossip_path.write_text(
