@@ -345,6 +345,10 @@ def verify_governance_witness_policy_chain(
     return current, tuple(history)
 
 
+def parse_governance_witness_policy(data: Any) -> WitnessQuorumPolicy:
+    return _policy_from_dict(data)
+
+
 def parse_governance_witness_policy_history(
     data: Any,
 ) -> tuple[GovernanceWitnessPolicyTransition, ...]:
@@ -591,6 +595,7 @@ __all__ = [
     "GovernanceWitnessPolicyTransition",
     "GovernanceWitnessPolicyTransitionSigner",
     "MalformedGovernanceWitnessPolicyTransition",
+    "parse_governance_witness_policy",
     "parse_governance_witness_policy_history",
     "policy_for_governance_generation",
     "verify_governance_witness_policy_chain",
