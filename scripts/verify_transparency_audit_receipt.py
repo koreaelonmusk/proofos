@@ -19,6 +19,11 @@ from proofos.auditor_key_recovery import (  # noqa: E402
     parse_auditor_key_history,
     verify_auditor_key_history,
 )
+from proofos.governance_witness import (  # noqa: E402
+    GovernanceQuorumState,
+    GovernanceWitnessBundle,
+    verify_governance_bundle,
+)
 from proofos.recovery_authority_revocation import (  # noqa: E402
     REVOCATION_GENESIS,
     parse_revocation_registry,
@@ -77,6 +82,10 @@ def main() -> int:
     parser.add_argument("--auditor-recovery-revocations", type=Path)
     parser.add_argument("--expected-auditor-revocation-generation", type=int)
     parser.add_argument("--expected-auditor-revocation-head-digest")
+    parser.add_argument("--governance-witness-bundle", type=Path, required=True)
+    parser.add_argument("--expected-governance-witness-policy-digest", required=True)
+    parser.add_argument("--expected-governance-generation", type=int, required=True)
+    parser.add_argument("--expected-governance-head-digest", required=True)
     parser.add_argument("--auditor-id", required=True)
     args = parser.parse_args()
 
@@ -91,6 +100,24 @@ def main() -> int:
             certificate_signer_id=args.certificate_signer_id,
         )
         receipt = TransparencyAuditReceipt.from_dict(_read_json(args.receipt))
+        governance_bundle = GovernanceWitnessBundle.from_dict(
+            _read_json(args.governance_witness_bundle)
+        )
+        governance_quorum = verify_governance_bundle(
+            governance_bundle,
+            expected_policy_digest=args.expected_governance_witness_policy_digest,
+            expected_governance_generation=args.expected_governance_generation,
+            expected_governance_head_digest=args.expected_governance_head_digest,
+        )
+        if governance_quorum.state is not GovernanceQuorumState.QUORUM:
+            raise ValueError(
+                f"governance witness quorum is {governance_quorum.state}"
+            )
+        governance = governance_bundle.snapshot
+        if governance.auditor_history_generation != args.expected_auditor_generation:
+            raise ValueError("auditor generation disagrees with governance snapshot")
+        if governance.auditor_history_digest != args.expected_auditor_history_digest:
+            raise ValueError("auditor history digest disagrees with governance snapshot")
         history = parse_auditor_key_history(
             _read_json(args.auditor_key_history)
         )
@@ -198,6 +225,54 @@ def main() -> int:
             revocation_generation = args.expected_auditor_revocation_generation
             revocation_head_digest = args.expected_auditor_revocation_head_digest
 
+        if recovery_policy is not None:
+            if governance.recovery_policy_generation != recovery_policy_generation:
+                raise ValueError(
+                    "recovery policy generation disagrees with governance snapshot"
+                )
+            if governance.recovery_policy_digest != recovery_policy.digest():
+                raise ValueError(
+                    "recovery policy digest disagrees with governance snapshot"
+                )
+            if (
+                governance.recovery_policy_history_digest
+                != recovery_policy_history_digest
+            ):
+                raise ValueError(
+                    "recovery policy history digest disagrees with governance snapshot"
+                )
+        else:
+            if governance.recovery_policy_generation != 0:
+                raise ValueError(
+                    "governance snapshot requires recovery policy configuration"
+                )
+            if governance.recovery_policy_digest != "0" * 64:
+                raise ValueError(
+                    "governance snapshot commits a generation-zero recovery "
+                    "policy, so the recovery policy artifact is required"
+                )
+            if (
+                governance.recovery_policy_history_digest
+                != RECOVERY_POLICY_TRANSITION_GENESIS
+            ):
+                raise ValueError(
+                    "governance snapshot has non-genesis recovery policy history "
+                    "without recovery policy configuration"
+                )
+        if revocation_generation is not None:
+            if governance.revocation_generation != revocation_generation:
+                raise ValueError(
+                    "revocation generation disagrees with governance snapshot"
+                )
+            if governance.revocation_head_digest != revocation_head_digest:
+                raise ValueError(
+                    "revocation head digest disagrees with governance snapshot"
+                )
+        elif governance.revocation_generation != 0:
+            raise ValueError(
+                "governance snapshot requires revocation registry configuration"
+            )
+
         trusted_auditor_key = verify_auditor_key_history(
             auditor_id=args.auditor_id,
             initial_public_key=args.auditor_initial_public_key,
@@ -229,6 +304,11 @@ def main() -> int:
             {
                 "valid": True,
                 "auditor_id": receipt.auditor_id,
+                "governance_generation": governance.governance_generation,
+                "governance_head_digest": governance.snapshot_digest(),
+                "governance_counted_witnesses": list(
+                    governance_quorum.counted_witnesses
+                ),
                 "auditor_key_generation": args.expected_auditor_generation,
                 "auditor_history_digest": args.expected_auditor_history_digest,
                 "auditor_recovery_policy_digest": (
@@ -244,6 +324,7 @@ def main() -> int:
                 "audit_result_digest": receipt.audit_result_digest,
                 "checkpoint_digest": receipt.checkpoint_digest,
                 "claim_boundary": [
+                    "requires N-of-M witnesses to attest the current governance heads",
                     "verifies receipt signature and source-artifact binding",
                     "recomputes transparency from pinned public inputs",
                     "derives the active auditor key from a pinned initial key and verified key history",

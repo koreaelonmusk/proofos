@@ -19,6 +19,13 @@ from proofos.auditor_key_rotation import (
     KEY_TRANSITION_GENESIS,
     AuditorKeyTransitionSigner,
 )
+from proofos.governance_witness import (
+    GOVERNANCE_GENESIS,
+    GOVERNANCE_SNAPSHOT_VERSION,
+    GovernanceAttestationSigner,
+    GovernanceSnapshot,
+    GovernanceWitnessBundle,
+)
 from proofos.keys import encode_public_key
 from proofos.quorum_certificate import QuorumCertificateSigner
 from proofos.recovery_authority_revocation import (
@@ -30,6 +37,7 @@ from proofos.recovery_policy_rotation import (
     RecoveryPolicyTransitionSigner,
 )
 from proofos.witness_gossip import WitnessGossipSigner
+from proofos.witness_quorum import WitnessQuorumPolicy
 from tests.test_witness_gossip import T0, fixture
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -78,6 +86,7 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         self.receipt_path = root / "receipt.json"
         self.transitions_path = root / "auditor-transitions.json"
         self.recovery_policy_path = root / "auditor-recovery-policy.json"
+        self.governance_path = root / "governance.json"
 
         self.gossip_path.write_text(
             json.dumps(self.bundle.to_dict()),
@@ -88,6 +97,20 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.transitions_path.write_text("[]", encoding="utf-8")
+        self.governance_signers = {
+            "gov-a": GovernanceAttestationSigner.generate("gov-a"),
+            "gov-b": GovernanceAttestationSigner.generate("gov-b"),
+            "gov-c": GovernanceAttestationSigner.generate("gov-c"),
+        }
+        self.governance_policy = WitnessQuorumPolicy(
+            "governance-witness-v1",
+            tuple(
+                (wid, signer.public_key_b64())
+                for wid, signer in self.governance_signers.items()
+            ),
+            2,
+        )
+        self.write_governance()
         self.key_path.write_bytes(
             self.auditor_key.private_bytes(
                 encoding=serialization.Encoding.PEM,
@@ -95,6 +118,46 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
                 encryption_algorithm=serialization.NoEncryption(),
             )
         )
+
+    def write_governance(
+        self,
+        *,
+        auditor_generation=0,
+        auditor_digest=KEY_TRANSITION_GENESIS,
+        recovery_policy_generation=0,
+        recovery_policy_digest="0" * 64,
+        recovery_policy_history_digest=RECOVERY_POLICY_TRANSITION_GENESIS,
+        revocation_generation=0,
+        revocation_digest=REVOCATION_GENESIS,
+    ):
+        snapshot = GovernanceSnapshot(
+            version=GOVERNANCE_SNAPSHOT_VERSION,
+            governance_generation=1,
+            previous_snapshot_digest=GOVERNANCE_GENESIS,
+            auditor_history_generation=auditor_generation,
+            auditor_history_digest=auditor_digest,
+            recovery_policy_generation=recovery_policy_generation,
+            recovery_policy_digest=recovery_policy_digest,
+            recovery_policy_history_digest=recovery_policy_history_digest,
+            revocation_generation=revocation_generation,
+            revocation_head_digest=revocation_digest,
+            issued_at=T0 + 72,
+        )
+        attestations = tuple(
+            self.governance_signers[wid].sign(snapshot, observed_at=T0 + 73)
+            for wid in ("gov-a", "gov-b")
+        )
+        bundle = GovernanceWitnessBundle(
+            version=GOVERNANCE_SNAPSHOT_VERSION,
+            snapshot=snapshot,
+            policy=self.governance_policy,
+            attestations=attestations,
+        )
+        self.governance_path.write_text(
+            json.dumps(bundle.to_dict()),
+            encoding="utf-8",
+        )
+        self.governance_snapshot = snapshot
 
     def sign_cmd(self):
         return [
@@ -147,6 +210,14 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             "0",
             "--expected-auditor-transition-digest",
             KEY_TRANSITION_GENESIS,
+            "--governance-witness-bundle",
+            str(self.governance_path),
+            "--expected-governance-witness-policy-digest",
+            self.governance_policy.digest(),
+            "--expected-governance-generation",
+            "1",
+            "--expected-governance-head-digest",
+            self.governance_snapshot.snapshot_digest(),
             "--auditor-id",
             "external-auditor-v1",
         ]
@@ -202,6 +273,10 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         )
         self.auditor_public_key = encode_public_key(successor.public_key())
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=transition.transition_digest(),
+        )
 
         cmd = self.verify_cmd()
         gen_index = cmd.index("--expected-auditor-generation") + 1
@@ -231,6 +306,10 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         )
         self.transitions_path.write_text("[]", encoding="utf-8")
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=transition.transition_digest(),
+        )
 
         cmd = self.verify_cmd()
         gen_index = cmd.index("--expected-auditor-generation") + 1
@@ -293,6 +372,13 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         )
         self.auditor_public_key = encode_public_key(replacement.public_key())
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=recovery.recovery_digest(),
+            recovery_policy_generation=0,
+            recovery_policy_digest=policy.digest(),
+            recovery_policy_history_digest=RECOVERY_POLICY_TRANSITION_GENESIS,
+        )
 
         cmd = self.verify_cmd()
         gen_index = cmd.index("--expected-auditor-generation") + 1
@@ -361,6 +447,13 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             )
         )
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=recovery.recovery_digest(),
+            recovery_policy_generation=0,
+            recovery_policy_digest=policy.digest(),
+            recovery_policy_history_digest=RECOVERY_POLICY_TRANSITION_GENESIS,
+        )
 
         cmd = self.verify_cmd()
         gen_index = cmd.index("--expected-auditor-generation") + 1
@@ -448,6 +541,13 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             )
         )
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=recovery.recovery_digest(),
+            recovery_policy_generation=1,
+            recovery_policy_digest=new_policy.digest(),
+            recovery_policy_history_digest=policy_transition.transition_digest(),
+        )
 
         cmd = self.verify_cmd()
         cmd[cmd.index("--expected-auditor-generation") + 1] = "1"
@@ -520,6 +620,11 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         policy_initial.write_text(json.dumps(old_policy.to_dict()), encoding="utf-8")
         policy_history.write_text("[]", encoding="utf-8")
         self.create_receipt()
+        self.write_governance(
+            recovery_policy_generation=1,
+            recovery_policy_digest=new_policy.digest(),
+            recovery_policy_history_digest=policy_transition.transition_digest(),
+        )
 
         cmd = self.verify_cmd()
         cmd.extend(
@@ -611,6 +716,15 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             )
         )
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=recovery.recovery_digest(),
+            recovery_policy_generation=0,
+            recovery_policy_digest=policy.digest(),
+            recovery_policy_history_digest=RECOVERY_POLICY_TRANSITION_GENESIS,
+            revocation_generation=1,
+            revocation_digest=revocation.revocation_digest(),
+        )
 
         cmd = self.verify_cmd()
         cmd[cmd.index("--expected-auditor-generation") + 1] = "1"
@@ -706,6 +820,15 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
             )
         )
         self.create_receipt()
+        self.write_governance(
+            auditor_generation=1,
+            auditor_digest=recovery.recovery_digest(),
+            recovery_policy_generation=0,
+            recovery_policy_digest=policy.digest(),
+            recovery_policy_history_digest=RECOVERY_POLICY_TRANSITION_GENESIS,
+            revocation_generation=1,
+            revocation_digest=revocation.revocation_digest(),
+        )
 
         cmd = self.verify_cmd()
         cmd[cmd.index("--expected-auditor-generation") + 1] = "1"
