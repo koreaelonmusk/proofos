@@ -81,6 +81,7 @@ class GovernanceWitnessPolicyTransition:
     generation: int
     previous_policy: dict[str, Any]
     next_policy: dict[str, Any]
+    effective_from_governance_generation: int
     previous_transition_digest: str
     issued_at: int | float
     previous_approvals: tuple[GovernancePolicyApproval, ...]
@@ -98,6 +99,9 @@ class GovernanceWitnessPolicyTransition:
             "generation": self.generation,
             "previous_policy": self.previous_policy,
             "next_policy": self.next_policy,
+            "effective_from_governance_generation": (
+                self.effective_from_governance_generation
+            ),
             "previous_transition_digest": self.previous_transition_digest,
             "issued_at": self.issued_at,
         }
@@ -126,6 +130,7 @@ class GovernanceWitnessPolicyTransition:
             "generation",
             "previous_policy",
             "next_policy",
+            "effective_from_governance_generation",
             "previous_transition_digest",
             "issued_at",
             "previous_approvals",
@@ -140,6 +145,10 @@ class GovernanceWitnessPolicyTransition:
             generation=_integer(data["generation"], "generation"),
             previous_policy=_policy_dict(data["previous_policy"], "previous_policy"),
             next_policy=_policy_dict(data["next_policy"], "next_policy"),
+            effective_from_governance_generation=_integer(
+                data["effective_from_governance_generation"],
+                "effective_from_governance_generation",
+            ),
             previous_transition_digest=_digest(
                 data["previous_transition_digest"], "previous_transition_digest"
             ),
@@ -158,6 +167,10 @@ class GovernanceWitnessPolicyTransition:
             raise MalformedGovernanceWitnessPolicyTransition(
                 "generation must be >= 1"
             )
+        if item.effective_from_governance_generation < 1:
+            raise MalformedGovernanceWitnessPolicyTransition(
+                "effective_from_governance_generation must be >= 1"
+            )
         if item.previous().digest() == item.successor().digest():
             raise MalformedGovernanceWitnessPolicyTransition(
                 "governance witness policy transition made no change"
@@ -174,6 +187,7 @@ class GovernanceWitnessPolicyTransitionSigner:
         next_policy: WitnessQuorumPolicy,
         previous_private_keys: Mapping[str, Ed25519PrivateKey],
         next_private_keys: Mapping[str, Ed25519PrivateKey],
+        effective_from_governance_generation: int,
         previous_transition_digest: str = GOVERNANCE_WITNESS_POLICY_GENESIS,
         issued_at: int | float | None = None,
     ) -> GovernanceWitnessPolicyTransition:
@@ -181,6 +195,14 @@ class GovernanceWitnessPolicyTransitionSigner:
             raise ValueError("generation must be an integer")
         if generation < 1:
             raise ValueError("generation must be >= 1")
+        if (
+            isinstance(effective_from_governance_generation, bool)
+            or not isinstance(effective_from_governance_generation, int)
+            or effective_from_governance_generation < 1
+        ):
+            raise ValueError(
+                "effective_from_governance_generation must be an integer >= 1"
+            )
         if not _SHA256_RE.fullmatch(previous_transition_digest):
             raise ValueError("previous_transition_digest must be a SHA-256 digest")
         if previous_policy.digest() == next_policy.digest():
@@ -197,6 +219,9 @@ class GovernanceWitnessPolicyTransitionSigner:
             generation=generation,
             previous_policy=_policy_to_dict(previous_policy),
             next_policy=_policy_to_dict(next_policy),
+            effective_from_governance_generation=(
+                effective_from_governance_generation
+            ),
             previous_transition_digest=previous_transition_digest,
             issued_at=stamp,
             previous_approvals=(),
@@ -227,6 +252,10 @@ def verify_policy_transition(
     if isinstance(transition.generation, bool) or transition.generation < 1:
         raise GovernanceWitnessPolicyContinuityError(
             "generation must be a positive integer"
+        )
+    if transition.effective_from_governance_generation < 1:
+        raise GovernanceWitnessPolicyContinuityError(
+            "effective_from_governance_generation must be >= 1"
         )
     if not math.isfinite(float(transition.issued_at)):
         raise GovernanceWitnessPolicyContinuityError("issued_at must be finite")
@@ -271,6 +300,7 @@ def verify_governance_witness_policy_chain(
     current = initial_policy
     history: list[WitnessQuorumPolicy] = [initial_policy]
     previous_digest = GOVERNANCE_WITNESS_POLICY_GENESIS
+    previous_effective_generation = 0
 
     for expected, transition in enumerate(transitions, start=1):
         verify_policy_transition(transition)
@@ -289,9 +319,19 @@ def verify_governance_witness_policy_chain(
                 "governance witness policy transition does not follow "
                 "the current policy history head"
             )
+        if (
+            transition.effective_from_governance_generation
+            <= previous_effective_generation
+        ):
+            raise GovernanceWitnessPolicyContinuityError(
+                "governance witness policy effective generations must increase"
+            )
         current = transition.successor()
         history.append(current)
         previous_digest = transition.transition_digest()
+        previous_effective_generation = (
+            transition.effective_from_governance_generation
+        )
 
     if len(transitions) != expected_generation:
         raise GovernanceWitnessPolicyContinuityError(
@@ -316,7 +356,8 @@ def parse_governance_witness_policy_history(
 
 
 def policy_for_governance_generation(
-    policies: tuple[WitnessQuorumPolicy, ...],
+    initial_policy: WitnessQuorumPolicy,
+    transitions: tuple[GovernanceWitnessPolicyTransition, ...],
     governance_generation: int,
 ) -> WitnessQuorumPolicy:
     if isinstance(governance_generation, bool) or not isinstance(
@@ -325,13 +366,17 @@ def policy_for_governance_generation(
         raise GovernanceWitnessPolicyContinuityError(
             "governance_generation must be an integer"
         )
-    if governance_generation < 1 or governance_generation > len(policies):
+    if governance_generation < 1:
         raise GovernanceWitnessPolicyContinuityError(
-            f"no governance witness policy available for governance generation "
-            f"{governance_generation}"
+            "governance_generation must be >= 1"
         )
-    return policies[governance_generation - 1]
-
+    current = initial_policy
+    for transition in transitions:
+        if transition.effective_from_governance_generation <= governance_generation:
+            current = transition.successor()
+        else:
+            break
+    return current
 
 def _sign_threshold(
     policy: WitnessQuorumPolicy,
