@@ -396,7 +396,7 @@ Executed and observed, not inferred:
 - Runtime action ceiling held under a live model
 - Judge console derived from those executions, byte-for-byte reproducible
 
-**812 tests.**
+**813 tests.**
 
 ## Not claimed
 
