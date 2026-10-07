@@ -1022,6 +1022,83 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         self.assertFalse(report["valid"])
         self.assertIn("rollback", report["detail"])
 
+    def test_public_verifier_accepts_published_policy_before_effective_generation(self):
+        old_policy = self.governance_policy
+        old_signers = self.governance_signers
+        future_signers = {
+            "gov-a": GovernanceAttestationSigner.generate("gov-a"),
+            "gov-b": GovernanceAttestationSigner.generate("gov-b"),
+            "gov-c": GovernanceAttestationSigner.generate("gov-c"),
+        }
+        future_policy = WitnessQuorumPolicy(
+            "governance-witness-v2",
+            tuple(
+                (wid, signer.public_key_b64())
+                for wid, signer in future_signers.items()
+            ),
+            2,
+        )
+        transition = GovernanceWitnessPolicyTransitionSigner.sign(
+            generation=1,
+            previous_policy=old_policy,
+            next_policy=future_policy,
+            previous_private_keys={
+                "gov-a": old_signers["gov-a"]._key,
+                "gov-b": old_signers["gov-b"]._key,
+            },
+            next_private_keys={
+                "gov-a": future_signers["gov-a"]._key,
+                "gov-b": future_signers["gov-b"]._key,
+            },
+            effective_from_governance_generation=2,
+            issued_at=T0 + 71,
+        )
+        initial_policy_path = pathlib.Path(self.tmp.name) / "future-policy-initial.json"
+        policy_history_path = pathlib.Path(self.tmp.name) / "future-policy-history.json"
+        initial_policy_path.write_text(
+            json.dumps(
+                {
+                    "policy_id": old_policy.policy_id,
+                    "witnesses": [
+                        {"witness_id": wid, "public_key_b64": key}
+                        for wid, key in old_policy.witnesses
+                    ],
+                    "threshold": old_policy.threshold,
+                }
+            ),
+            encoding="utf-8",
+        )
+        policy_history_path.write_text(
+            json.dumps([transition.to_dict()]),
+            encoding="utf-8",
+        )
+        self.create_receipt()
+
+        cmd = self.verify_cmd()
+        cmd.extend(
+            [
+                "--governance-witness-policy-initial",
+                str(initial_policy_path),
+                "--governance-witness-policy-history",
+                str(policy_history_path),
+                "--expected-governance-witness-policy-generation",
+                "1",
+                "--expected-governance-witness-policy-history-digest",
+                transition.transition_digest(),
+            ]
+        )
+        result = subprocess.run(
+            cmd,
+            cwd=self.outside,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["governance_witness_policy_generation"], 1)
+
     def test_signer_refuses_to_overwrite_existing_receipt(self):
         self.create_receipt()
         second = subprocess.run(
