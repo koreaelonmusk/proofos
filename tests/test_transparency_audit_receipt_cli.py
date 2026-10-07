@@ -869,9 +869,9 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         old_signers = self.governance_signers
         old_policy = self.governance_policy
         new_signers = {
-            "gov-d": GovernanceAttestationSigner.generate("gov-d"),
-            "gov-e": GovernanceAttestationSigner.generate("gov-e"),
-            "gov-f": GovernanceAttestationSigner.generate("gov-f"),
+            "gov-a": GovernanceAttestationSigner.generate("gov-a"),
+            "gov-b": GovernanceAttestationSigner.generate("gov-b"),
+            "gov-c": GovernanceAttestationSigner.generate("gov-c"),
         }
         new_policy = WitnessQuorumPolicy(
             "governance-witness-v2",
@@ -890,8 +890,8 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
                 "gov-b": old_signers["gov-b"]._key,
             },
             next_private_keys={
-                "gov-d": new_signers["gov-d"]._key,
-                "gov-e": new_signers["gov-e"]._key,
+                "gov-a": new_signers["gov-a"]._key,
+                "gov-b": new_signers["gov-b"]._key,
             },
             effective_from_governance_generation=1,
             previous_transition_digest=GOVERNANCE_WITNESS_POLICY_GENESIS,
@@ -950,8 +950,8 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
         old_signers = self.governance_signers
         old_policy = self.governance_policy
         new_signers = {
-            "gov-d": GovernanceAttestationSigner.generate("gov-d"),
-            "gov-e": GovernanceAttestationSigner.generate("gov-e"),
+            "gov-a": GovernanceAttestationSigner.generate("gov-a"),
+            "gov-b": GovernanceAttestationSigner.generate("gov-b"),
         }
         new_policy = WitnessQuorumPolicy(
             "governance-witness-v2",
@@ -970,8 +970,8 @@ class TransparencyAuditReceiptCliTests(unittest.TestCase):
                 "gov-b": old_signers["gov-b"]._key,
             },
             next_private_keys={
-                "gov-d": new_signers["gov-d"]._key,
-                "gov-e": new_signers["gov-e"]._key,
+                "gov-a": new_signers["gov-a"]._key,
+                "gov-b": new_signers["gov-b"]._key,
             },
             effective_from_governance_generation=1,
             issued_at=T0 + 71,
