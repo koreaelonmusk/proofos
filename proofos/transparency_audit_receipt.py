@@ -28,7 +28,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from .integrity import canonical_payload, content_hash
 from .keys import encode_public_key
 from .quorum_certificate import QuorumCertificate
-from .transparency_gate import TransparencyResult
+from .transparency_gate import TransparencyResult, TransparencyState
 from .witness_gossip import WitnessGossipBundle
 
 TRANSPARENCY_AUDIT_RECEIPT_VERSION = "proofos.transparency-audit-receipt.v1"
@@ -184,19 +184,32 @@ class TransparencyAuditReceipt:
         if certificate_digest is not None:
             certificate_digest = _digest(certificate_digest, "certificate_digest")
 
+        transparency_state = _nonempty_str(
+            data["transparency_state"], "transparency_state"
+        )
+        checkpoint_digest_raw = _str(
+            data["checkpoint_digest"], "checkpoint_digest"
+        )
+        if transparency_state == str(TransparencyState.REJECTED_SPLIT_VIEW):
+            if checkpoint_digest_raw != "":
+                raise MalformedTransparencyAuditReceipt(
+                    "split-view receipt must use empty checkpoint_digest sentinel"
+                )
+            checkpoint_digest = ""
+        else:
+            checkpoint_digest = _digest(
+                checkpoint_digest_raw, "checkpoint_digest"
+            )
+
         receipt = cls(
             version=_nonempty_str(data["version"], "version"),
             auditor_id=_nonempty_str(data["auditor_id"], "auditor_id"),
-            transparency_state=_nonempty_str(
-                data["transparency_state"], "transparency_state"
-            ),
+            transparency_state=transparency_state,
             policy_digest=_digest(data["policy_digest"], "policy_digest"),
             operation_id=_nonempty_str(data["operation_id"], "operation_id"),
             execution_id=_nonempty_str(data["execution_id"], "execution_id"),
             checkpoint_version=_int(data["checkpoint_version"], "checkpoint_version"),
-            checkpoint_digest=_digest(
-                data["checkpoint_digest"], "checkpoint_digest"
-            ),
+            checkpoint_digest=checkpoint_digest,
             counted_witnesses=counted,
             required=_int(data["required"], "required"),
             gossip_publisher_id=_nonempty_str(
@@ -223,13 +236,15 @@ class TransparencyAuditReceipt:
             )
         if receipt.required < 1:
             raise MalformedTransparencyAuditReceipt("required must be >= 1")
-        if (
-            receipt.transparency_state == "ACCEPTED"
-            and len(receipt.counted_witnesses) < receipt.required
-        ):
-            raise MalformedTransparencyAuditReceipt(
-                "accepted audit receipt has fewer counted witnesses than required"
-            )
+        if receipt.transparency_state == str(TransparencyState.ACCEPTED):
+            if len(receipt.counted_witnesses) < receipt.required:
+                raise MalformedTransparencyAuditReceipt(
+                    "accepted audit receipt has fewer counted witnesses than required"
+                )
+            if receipt.certificate_signer_id is None or receipt.certificate_digest is None:
+                raise MalformedTransparencyAuditReceipt(
+                    "accepted audit receipt requires a quorum certificate binding"
+                )
         return receipt
 
 
@@ -256,6 +271,16 @@ class TransparencyAuditReceiptSigner:
         certificate: QuorumCertificate | None,
         issued_at: float | None = None,
     ) -> TransparencyAuditReceipt:
+        if result.state is TransparencyState.ACCEPTED:
+            if certificate is None:
+                raise TransparencyAuditReceiptBindingError(
+                    "accepted audit result requires the quorum certificate artifact"
+                )
+            if result.certificate_signer_id != certificate.signer_id:
+                raise TransparencyAuditReceiptBindingError(
+                    "accepted audit certificate signer does not match result"
+                )
+
         stamp = time.time() if issued_at is None else float(issued_at)
         if not math.isfinite(stamp):
             raise ValueError("issued_at must be finite")
@@ -329,6 +354,15 @@ class TransparencyAuditReceiptVerifier:
                 f"receipt belongs to {receipt.auditor_id!r}, not "
                 f"{self.auditor_id!r}"
             )
+        if result.state is TransparencyState.ACCEPTED:
+            if certificate is None:
+                raise TransparencyAuditReceiptBindingError(
+                    "accepted audit verification requires the quorum certificate artifact"
+                )
+            if result.certificate_signer_id != certificate.signer_id:
+                raise TransparencyAuditReceiptBindingError(
+                    "accepted audit certificate signer does not match result"
+                )
 
         try:
             signature = base64.b64decode(receipt.signature, validate=True)
