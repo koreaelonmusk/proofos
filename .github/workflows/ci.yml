@@ -2,11 +2,18 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+# PRs cover feature branches; keep the latest run for each PR or branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verifier:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -144,6 +151,7 @@ jobs:
 
   collector-runtime:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
